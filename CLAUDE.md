@@ -34,3 +34,12 @@ issues and discussions when needed.
 - Mentor (bobdingAI) reviews and merges. No auto-merge.
 - Weekly meeting notes live in GitHub Discussions, category `Weekly Sync`.
 - Per-meeting workflow: `/prep` → meeting → `/log` (run from this folder).
+
+## Session Discipline
+
+Read and follow `~/.claude/projects/-home-sun-gsoc2026-dora-test-utils/memory/progress-recording-spec.md` at the start of every session. It defines two rules:
+
+1. **Before any task** — invoke the relevant superpowers skill via the `Skill` tool
+2. **After any code change** — record progress in `docs/PROGRESS.md`, `memory/*.md`, and `memory/MEMORY.md`
+
+The spec file is the portable source of truth; CLAUDE.md only points to it.
