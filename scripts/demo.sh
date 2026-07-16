@@ -40,8 +40,8 @@ banner "1. Build all binaries"
 BUILD_LOG=$(mktemp)
 trap "rm -f $BUILD_LOG" EXIT
 
-step "Build test_source, test-sink, echo-node..."
-if cargo build --bin test_source --bin test-sink --bin echo-node > "$BUILD_LOG" 2>&1; then
+step "Build test-source, test-sink, echo-node, classifier-node..."
+if cargo build --bin test-source --bin test-sink --bin echo-node --bin classifier-node > "$BUILD_LOG" 2>&1; then
     tail -1 "$BUILD_LOG"
 else
     warn "Build failed! Last 20 lines:"
