@@ -57,7 +57,29 @@ pub struct Difference {
 /// - The expected file cannot be read or parsed
 /// - `DoraNode::init_from_env()` fails
 pub fn run_test_sink(config: SinkConfig) -> eyre::Result<SinkResult> {
-    // ── 1. Load expected data ────────────────────────────────────
+    // ── 1. Initialize DORA node ──────────────────────────────────
+    let (_node, mut events) =
+        DoraNode::init_from_env().context("failed to initialize DORA node")?;
+
+    // ── 2. Accumulate input events ────────────────────────────────
+    let mut received: Vec<arrow::array::ArrayRef> = Vec::new();
+    while let Some(event) = events.recv() {
+        match event {
+            Event::Input { data, .. } => {
+                // ArrowData.0 is an ArrayRef (Arc<dyn Array>)
+                received.push(data.0);
+            }
+            Event::Stop(_) | Event::InputClosed { .. } => break,
+            _ => {}
+        }
+    }
+
+    // ── 3. Record mode: serialize raw data to JSON and return ────
+    if config.record_mode {
+        return write_record_output(&received, &config.output_file);
+    }
+
+    // ── 4. Load expected data ────────────────────────────────────
     let expected_json: serde_json::Value = {
         let contents = std::fs::read_to_string(&config.expected_file).with_context(|| {
             format!(
@@ -83,7 +105,7 @@ pub fn run_test_sink(config: SinkConfig) -> eyre::Result<SinkResult> {
         vec![expected_data]
     };
 
-    // ── 1b. Parse expected data_type for semantic comparison ────
+    // ── 4b. Parse expected data_type for semantic comparison ────
     let expected_data_type: Option<arrow::datatypes::DataType> = expected_json
         .get("data_type")
         .map(|dt| {
@@ -92,36 +114,14 @@ pub fn run_test_sink(config: SinkConfig) -> eyre::Result<SinkResult> {
         })
         .transpose()?;
 
-    // ── 2. Initialize DORA node ──────────────────────────────────
-    let (_node, mut events) =
-        DoraNode::init_from_env().context("failed to initialize DORA node")?;
-
-    // ── 3. Accumulate input events ────────────────────────────────
-    let mut received: Vec<arrow::array::ArrayRef> = Vec::new();
-    while let Some(event) = events.recv() {
-        match event {
-            Event::Input { data, .. } => {
-                // ArrowData.0 is an ArrayRef (Arc<dyn Array>)
-                received.push(data.0);
-            }
-            Event::Stop(_) | Event::InputClosed { .. } => break,
-            _ => {}
-        }
-    }
-
-    // ── 3b. Record mode: serialize raw data to JSON and return ────
-    if config.record_mode {
-        return write_record_output(&received, &config.output_file);
-    }
-
-    // ── 4. Compare ────────────────────────────────────────────────
+    // ── 5. Compare ────────────────────────────────────────────────
     let result = if config.strict {
         compare_strict(&expected_elements, &received)?
     } else {
         compare_semantic(&expected_elements, &received, expected_data_type.as_ref())
     };
 
-    // ── 5. Write result ──────────────────────────────────────────
+    // ── 6. Write result ──────────────────────────────────────────
     let result_json = serde_json::to_string_pretty(&result)?;
     std::fs::write(&config.output_file, result_json).with_context(|| {
         format!(
