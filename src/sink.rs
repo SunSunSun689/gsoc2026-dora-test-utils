@@ -20,7 +20,11 @@ pub struct SinkConfig {
     /// If true, exit with non-zero on mismatch.
     pub fail_on_mismatch: bool,
     /// If true, use exact JSON string comparison instead of Arrow semantic comparison.
+    /// Ignored in record mode.
     pub strict: bool,
+    /// If true, skip comparison and write raw received data to output_file.
+    /// Default: false (existing behavior).
+    pub record_mode: bool,
 }
 
 /// Result of a sink comparison.
@@ -53,7 +57,29 @@ pub struct Difference {
 /// - The expected file cannot be read or parsed
 /// - `DoraNode::init_from_env()` fails
 pub fn run_test_sink(config: SinkConfig) -> eyre::Result<SinkResult> {
-    // ── 1. Load expected data ────────────────────────────────────
+    // ── 1. Initialize DORA node ──────────────────────────────────
+    let (_node, mut events) =
+        DoraNode::init_from_env().context("failed to initialize DORA node")?;
+
+    // ── 2. Accumulate input events ────────────────────────────────
+    let mut received: Vec<arrow::array::ArrayRef> = Vec::new();
+    while let Some(event) = events.recv() {
+        match event {
+            Event::Input { data, .. } => {
+                // ArrowData.0 is an ArrayRef (Arc<dyn Array>)
+                received.push(data.0);
+            }
+            Event::Stop(_) | Event::InputClosed { .. } => break,
+            _ => {}
+        }
+    }
+
+    // ── 3. Record mode: serialize raw data to JSON and return ────
+    if config.record_mode {
+        return write_record_output(&received, &config.output_file);
+    }
+
+    // ── 4. Load expected data ────────────────────────────────────
     let expected_json: serde_json::Value = {
         let contents = std::fs::read_to_string(&config.expected_file).with_context(|| {
             format!(
@@ -79,7 +105,7 @@ pub fn run_test_sink(config: SinkConfig) -> eyre::Result<SinkResult> {
         vec![expected_data]
     };
 
-    // ── 1b. Parse expected data_type for semantic comparison ────
+    // ── 4b. Parse expected data_type for semantic comparison ────
     let expected_data_type: Option<arrow::datatypes::DataType> = expected_json
         .get("data_type")
         .map(|dt| {
@@ -88,31 +114,14 @@ pub fn run_test_sink(config: SinkConfig) -> eyre::Result<SinkResult> {
         })
         .transpose()?;
 
-    // ── 2. Initialize DORA node ──────────────────────────────────
-    let (_node, mut events) =
-        DoraNode::init_from_env().context("failed to initialize DORA node")?;
-
-    // ── 3. Accumulate input events ────────────────────────────────
-    let mut received: Vec<arrow::array::ArrayRef> = Vec::new();
-    while let Some(event) = events.recv() {
-        match event {
-            Event::Input { data, .. } => {
-                // ArrowData.0 is an ArrayRef (Arc<dyn Array>)
-                received.push(data.0);
-            }
-            Event::Stop(_) | Event::InputClosed { .. } => break,
-            _ => {}
-        }
-    }
-
-    // ── 4. Compare ────────────────────────────────────────────────
+    // ── 5. Compare ────────────────────────────────────────────────
     let result = if config.strict {
         compare_strict(&expected_elements, &received)?
     } else {
         compare_semantic(&expected_elements, &received, expected_data_type.as_ref())
     };
 
-    // ── 5. Write result ──────────────────────────────────────────
+    // ── 6. Write result ──────────────────────────────────────────
     let result_json = serde_json::to_string_pretty(&result)?;
     std::fs::write(&config.output_file, result_json).with_context(|| {
         format!(
@@ -367,6 +376,72 @@ fn compare_semantic(
     result
 }
 
+/// Serialize received Arrow arrays to a JSON record file.
+///
+/// Format: `{"data": [...], "data_type": "...", "count": N}`
+fn write_record_output(
+    received: &[arrow::array::ArrayRef],
+    output_file: &std::path::Path,
+) -> eyre::Result<SinkResult> {
+    use arrow::array::RecordBatch;
+    use arrow::datatypes::{Field, Schema};
+    use arrow_json::writer::{JsonArray, Writer};
+    use std::sync::Arc;
+
+    // Serialize each received Arrow array to JSON values.
+    let mut all_rows: Vec<serde_json::Value> = Vec::new();
+    let mut data_type: Option<String> = None;
+
+    for array in received {
+        if data_type.is_none() {
+            data_type = Some(format!("{:?}", array.data_type()));
+        }
+
+        let schema = Schema::new(vec![Field::new("data", array.data_type().clone(), true)]);
+        let batch = RecordBatch::try_new(Arc::new(schema), vec![array.clone()])
+            .context("failed to create RecordBatch from received Arrow array")?;
+
+        let mut buf = Vec::new();
+        let mut writer = Writer::<_, JsonArray>::new(&mut buf);
+        writer.write(&batch).context("Arrow -> JSON write failed")?;
+        writer.finish().context("Arrow -> JSON finish failed")?;
+
+        let value: serde_json::Value =
+            serde_json::from_slice(&buf).context("invalid JSON from Arrow serialization")?;
+
+        // Each row is an object like {"data": 42}; extract the "data" value.
+        if let Some(arr) = value.as_array() {
+            for row in arr {
+                if let Some(data_val) = row.get("data") {
+                    all_rows.push(data_val.clone());
+                }
+            }
+        }
+    }
+
+    let record_json = serde_json::json!({
+        "data": all_rows,
+        "data_type": data_type.unwrap_or_else(|| "Unknown".to_string()),
+        "count": all_rows.len(),
+    });
+
+    let json_str = serde_json::to_string_pretty(&record_json)?;
+    std::fs::write(output_file, json_str).with_context(|| {
+        format!(
+            "failed to write record output to '{}'",
+            output_file.display()
+        )
+    })?;
+
+    // Return a SinkResult compatible shape — record mode always "matches" itself.
+    Ok(SinkResult {
+        r#match: true,
+        expected_count: all_rows.len(),
+        received_count: all_rows.len(),
+        differences: Vec::new(),
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -593,5 +668,39 @@ mod tests {
             Some(999),
             "difference should be at index 999"
         );
+    }
+
+    #[test]
+    fn test_record_mode_output_format() {
+        use std::io::Read;
+
+        // Serialize known Arrow data via write_record_output.
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let output_file = tmp.path().join("record.json");
+
+        let array: arrow::array::ArrayRef =
+            Arc::new(arrow::array::Int32Array::from(vec![10, 20, 30]));
+
+        let received = vec![array];
+
+        let result = write_record_output(&received, &output_file)
+            .expect("write_record_output should succeed");
+
+        assert!(result.r#match);
+        assert_eq!(result.expected_count, 3);
+        assert_eq!(result.received_count, 3);
+
+        // Verify output file content.
+        let mut contents = String::new();
+        std::fs::File::open(&output_file)
+            .unwrap()
+            .read_to_string(&mut contents)
+            .unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&contents).expect("valid JSON");
+
+        assert_eq!(parsed["count"], serde_json::json!(3));
+        assert!(parsed["data"].is_array());
+        assert_eq!(parsed["data"].as_array().unwrap().len(), 3);
+        // Values should be 10, 20, 30 (may be nested under "data" key).
     }
 }

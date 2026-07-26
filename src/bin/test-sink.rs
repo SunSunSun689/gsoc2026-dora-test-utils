@@ -15,7 +15,8 @@ use dora_test_utils::sink::{run_test_sink, SinkConfig};
 )]
 struct Cli {
     /// Path to the expected output file (DORA JSON format).
-    #[arg(long)]
+    /// Not required when --record-mode is set.
+    #[arg(long, default_value = "./expected.json")]
     expected_file: PathBuf,
 
     /// Path to write comparison result (default: ./result.json).
@@ -29,6 +30,10 @@ struct Cli {
     /// Use exact JSON string comparison instead of Arrow semantic comparison.
     #[arg(long)]
     strict: bool,
+
+    /// Record mode: skip comparison, write raw received data to output_file.
+    #[arg(long)]
+    record_mode: bool,
 }
 
 fn main() {
@@ -41,6 +46,7 @@ fn main() {
         output_file: cli.output_file,
         fail_on_mismatch,
         strict: cli.strict,
+        record_mode: cli.record_mode,
     };
 
     match run_test_sink(config) {

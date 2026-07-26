@@ -125,6 +125,7 @@
 
 pub mod harness;
 pub mod mock;
+pub mod record;
 pub mod sink;
 pub mod source;
 pub mod traits;
@@ -133,4 +134,5 @@ pub mod traits;
 pub use harness::NodeHarness;
 pub use mock::event_stream::MockEventStream;
 pub use mock::output::{MockOutputSender, OutputCollector};
+pub use record::{RecordSession, Recording};
 pub use traits::IntoInputData;
