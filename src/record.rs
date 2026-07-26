@@ -296,7 +296,7 @@ fn get_dora_version(dora_binary: &Path) -> Result<String, RecordError> {
     let output = Command::new(dora_binary)
         .arg("--version")
         .output()
-        .map_err(|e| RecordError::Io(e))?;
+        .map_err(RecordError::Io)?;
     if output.status.success() {
         let v = String::from_utf8_lossy(&output.stdout).trim().to_string();
         Ok(if v.is_empty() {
