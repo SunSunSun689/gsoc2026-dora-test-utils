@@ -57,24 +57,6 @@
 - `cargo test --test e2e -- --test-threads=1` ✅ (4.23s)
 - `cargo fmt` ✅
 
-### Task 1: Add `record_mode` to `SinkConfig` (2026-07-26)
-
-- Added `record_mode: bool` field to `SinkConfig` struct
-- Added `--record-mode` CLI flag to test-sink binary
-- Record-mode branch in `run_test_sink`: skips comparison, writes raw data as JSON
-- Added `write_record_output` helper: serializes Arrow arrays to `{"data": [...], "data_type": "...", "count": N}` format
-- Added unit test `test_record_mode_output_format` (int32 array [10,20,30] verified)
-
-### Commits
-| Commit | Description |
-|--------|-------------|
-| `35d40f1` | feat(sink): add record_mode to SinkConfig for raw data capture |
-
-### Verification
-- `cargo check` ✅ (no warnings)
-- `cargo fmt --check` ✅
-- `cargo test --lib sink::` ✅ (13 tests, 0 failed, 0 warnings)
-
 ## Week 9 后半 (2026-07-26): RecordSession implementation
 
 ### RecordSession + Recording (new `src/record.rs`)
@@ -134,22 +116,3 @@
 - Investigate parallel NodeHarness deadlock root cause in DORA upstream
   (`tokio::sync::mpsc::channel(5)` in `init_with_options`)
 
-### Task 3: End-to-end tests for RecordSession (2026-07-26)
-
-- Created `tests/e2e_record.rs` with 4 tests:
-  - `record_echo_pipeline` — Full record-mode dataflow via RecordSession, verifies metadata + sink output
-  - `record_save_and_load_roundtrip` — Save recording to JSON, load it back, verify round-trip fidelity
-  - `record_dataflow_not_found` — Error handling for nonexistent YAML file
-  - `record_no_sinks_configured` — Error handling when no sinks registered
-- Fixed `run_test_sink` in `src/sink.rs`: moved expected file loading after record-mode check to prevent "expected file not found" error in record mode
-- Applied type correction: `timeout_secs` compared with f64 EPSILON instead of exact equality
-
-### Commits
-| Commit | Description |
-|--------|-------------|
-| `5c8dc44` | test(record): add e2e tests for RecordSession |
-
-### Verification
-- `cargo check` ✅
-- `cargo fmt --check` ✅
-- `cargo test --test e2e_record -- --test-threads=1` ✅ (4/4 pass, 2.56s)
