@@ -84,6 +84,83 @@ impl From<serde_json::Error> for RecordError {
     }
 }
 
+/// Error type for ReplaySession operations.
+#[derive(Debug)]
+pub enum ReplayError {
+    /// The Recording file could not be loaded.
+    LoadFailed(Box<RecordError>),
+    /// The dataflow YAML file was not found.
+    DataflowNotFound(PathBuf),
+    /// The dora CLI binary was not found.
+    DoraNotFound(String),
+    /// dora run exited with a non-zero status.
+    RunFailed { status: String, stderr: String },
+    /// No sinks were registered via replay_sink() before run().
+    NoSinksConfigured,
+    /// A sink registered via replay_sink() is not present in the baseline Recording.
+    SinkNotInBaseline(String),
+    /// A registered sink's output file was not found after dora run.
+    SinkOutputMissing { sink_id: String, path: PathBuf },
+    /// Failed to read or parse a sink's output file.
+    SinkReadError { sink_id: String, error: String },
+    /// I/O error.
+    Io(std::io::Error),
+    /// JSON (de)serialization error.
+    Json(serde_json::Error),
+}
+
+impl std::fmt::Display for ReplayError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ReplayError::LoadFailed(e) => write!(f, "failed to load recording: {e}"),
+            ReplayError::DataflowNotFound(path) => {
+                write!(f, "dataflow YAML not found: '{}'", path.display())
+            }
+            ReplayError::DoraNotFound(path) => write!(f, "dora CLI not found at '{path}'"),
+            ReplayError::RunFailed { status, stderr } => {
+                write!(f, "dora run failed with status {status}: {stderr}")
+            }
+            ReplayError::NoSinksConfigured => {
+                write!(f, "no sinks configured — call replay_sink() before run()")
+            }
+            ReplayError::SinkNotInBaseline(id) => {
+                write!(f, "sink '{id}' registered via replay_sink() but not found in baseline recording")
+            }
+            ReplayError::SinkOutputMissing { sink_id, path } => {
+                write!(f, "sink '{sink_id}' output file not found at '{}'", path.display())
+            }
+            ReplayError::SinkReadError { sink_id, error } => {
+                write!(f, "failed to read sink '{sink_id}' output: {error}")
+            }
+            ReplayError::Io(e) => write!(f, "I/O error: {e}"),
+            ReplayError::Json(e) => write!(f, "JSON error: {e}"),
+        }
+    }
+}
+
+impl std::error::Error for ReplayError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            ReplayError::LoadFailed(e) => Some(e.as_ref()),
+            ReplayError::Io(e) => Some(e),
+            ReplayError::Json(e) => Some(e),
+            _ => None,
+        }
+    }
+}
+
+impl From<std::io::Error> for ReplayError {
+    fn from(e: std::io::Error) -> Self { ReplayError::Io(e) }
+}
+
+impl From<serde_json::Error> for ReplayError {
+    fn from(e: serde_json::Error) -> Self { ReplayError::Json(e) }
+}
+
+impl From<RecordError> for ReplayError {
+    fn from(e: RecordError) -> Self { ReplayError::LoadFailed(Box::new(e)) }
+}
+
 /// A recording session for a DORA dataflow.
 ///
 /// Created via [`RecordSession::attach`], configured with sinks and timeout,
