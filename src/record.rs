@@ -279,8 +279,13 @@ impl std::fmt::Display for DiffReport {
 /// Result of a replay run: baseline sinks, current sinks, and comparison report.
 #[derive(Debug, Clone, Serialize)]
 pub struct ReplayResult {
+    /// Metadata from the baseline Recording.
+    pub metadata: RecordingMetadata,
+    /// Baseline sink outputs.
     pub baseline_sinks: HashMap<String, serde_json::Value>,
+    /// Replay sink outputs.
     pub current_sinks: HashMap<String, serde_json::Value>,
+    /// Diff report.
     pub report: DiffReport,
 }
 
@@ -453,6 +458,7 @@ impl ReplaySession {
         let report = compare_recordings(&self.recording.sinks, &current_sinks);
 
         Ok(ReplayResult {
+            metadata: self.recording.metadata.clone(),
             baseline_sinks: self.recording.sinks.clone(),
             current_sinks,
             report,
@@ -748,12 +754,12 @@ fn compare_sink_outputs(
 
     // If JSON diff found differences in a "data" array, try semantic
     // comparison as a second pass.
-    let has_data_diff = diffs.iter().any(|d| d.path.starts_with("data"));
+    let has_data_diff = diffs.iter().any(|d| d.path.starts_with(".data"));
     if has_data_diff {
         if let (Some(baseline_data), Some(current_data)) =
             (baseline.get("data"), current.get("data"))
         {
-            diffs.retain(|d| !d.path.starts_with("data"));
+            diffs.retain(|d| !d.path.starts_with(".data"));
             let semantic_diffs = compare_data_semantic(baseline_data, current_data);
             diffs.extend(semantic_diffs);
         }
@@ -960,7 +966,14 @@ mod tests {
     fn test_replay_result_is_clean() {
         let mut sinks = HashMap::new();
         sinks.insert("s1".into(), serde_json::json!({"count": 1}));
+        let meta = RecordingMetadata {
+            dataflow_yaml: "dummy.yml".into(),
+            recorded_at_unix: 0,
+            timeout_secs: 10.0,
+            dora_version: "test".into(),
+        };
         let result = ReplayResult {
+            metadata: meta,
             baseline_sinks: sinks.clone(),
             current_sinks: sinks,
             report: DiffReport {
@@ -972,6 +985,12 @@ mod tests {
 
     #[test]
     fn test_replay_result_assert_panics_on_regression() {
+        let meta = RecordingMetadata {
+            dataflow_yaml: "dummy.yml".into(),
+            recorded_at_unix: 0,
+            timeout_secs: 10.0,
+            dora_version: "test".into(),
+        };
         let mut baseline = HashMap::new();
         baseline.insert("s1".into(), serde_json::json!({"count": 1}));
         let current = HashMap::new();
@@ -983,6 +1002,7 @@ mod tests {
             }],
         };
         let result = ReplayResult {
+            metadata: meta,
             baseline_sinks: baseline,
             current_sinks: current,
             report,

@@ -133,7 +133,7 @@
 //! | `source::run_test_source` | **Stable** | TestSource CLI + library |
 //! | `sink::run_test_sink` | **Stable** | TestSink CLI + library |
 //! | [`RecordSession`] / [`Recording`] | **Experimental** | Record/replay in active development (Week 9–10); API may evolve |
-| [`ReplaySession`] / [`ReplayResult`] / [`DiffReport`] | **Experimental** | Regression testing (Week 10); API may evolve |
+//! | [`ReplaySession`] / [`ReplayResult`] / [`DiffReport`] | **Experimental** | Regression testing (Week 10); API may evolve |
 //!
 //! [init]: https://docs.rs/dora-node-api/latest/dora_node_api/struct.DoraNode.html#method.init_testing
 //! [dora-it]: https://docs.rs/dora-node-api/latest/dora_node_api/integration_testing/
