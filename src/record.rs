@@ -20,6 +20,8 @@ use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 
+use crate::sink;
+
 /// Error type for RecordSession operations.
 #[derive(Debug)]
 pub enum RecordError {
@@ -765,8 +767,6 @@ fn compare_data_semantic(
     baseline: &serde_json::Value,
     current: &serde_json::Value,
 ) -> Vec<FieldDiff> {
-    use crate::sink;
-
     // Extract baseline elements as &serde_json::Value references.
     let baseline_arr = match baseline.as_array() {
         Some(arr) => arr,
@@ -777,6 +777,14 @@ fn compare_data_semantic(
             return diffs;
         }
     };
+
+    // Symmetric check: current must also be an array before attempting Arrow conversion.
+    if current.as_array().is_none() {
+        let mut diffs = Vec::new();
+        json_diff("data", baseline, current, &mut diffs);
+        return diffs;
+    }
+
     let baseline_refs: Vec<&serde_json::Value> = baseline_arr.iter().collect();
 
     // Convert current to Arrow arrays.
@@ -836,14 +844,21 @@ fn json_to_arrow_arrays(value: &serde_json::Value) -> Result<Vec<arrow::array::A
     let mut result = Vec::new();
     for elem in arrays {
         let data_val = elem.get("data").unwrap_or(elem);
-        let arr: arrow::array::Int64Array = match data_val {
+        let arr: arrow::array::ArrayRef = match data_val {
             serde_json::Value::Number(n) => {
-                let v = n.as_i64().unwrap_or(0);
-                arrow::array::Int64Array::from(vec![v])
+                // Try Float64 first (preserves fractional parts),
+                // then fall back to Int64 for whole numbers.
+                if let Some(f) = n.as_f64() {
+                    Arc::new(arrow::array::Float64Array::from(vec![f]))
+                } else if let Some(i) = n.as_i64() {
+                    Arc::new(arrow::array::Int64Array::from(vec![i]))
+                } else {
+                    return Err("non-numeric value in data array".into());
+                }
             }
-            _ => arrow::array::Int64Array::from(vec![0]),
+            _ => return Err("unsupported data type for semantic comparison".into()),
         };
-        result.push(Arc::new(arr) as arrow::array::ArrayRef);
+        result.push(arr);
     }
     Ok(result)
 }
