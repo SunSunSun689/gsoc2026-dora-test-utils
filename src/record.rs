@@ -126,10 +126,17 @@ impl std::fmt::Display for ReplayError {
                 write!(f, "no sinks configured — call replay_sink() before run()")
             }
             ReplayError::SinkNotInBaseline(id) => {
-                write!(f, "sink '{id}' registered via replay_sink() but not found in baseline recording")
+                write!(
+                    f,
+                    "sink '{id}' registered via replay_sink() but not found in baseline recording"
+                )
             }
             ReplayError::SinkOutputMissing { sink_id, path } => {
-                write!(f, "sink '{sink_id}' output file not found at '{}'", path.display())
+                write!(
+                    f,
+                    "sink '{sink_id}' output file not found at '{}'",
+                    path.display()
+                )
             }
             ReplayError::SinkReadError { sink_id, error } => {
                 write!(f, "failed to read sink '{sink_id}' output: {error}")
@@ -152,15 +159,21 @@ impl std::error::Error for ReplayError {
 }
 
 impl From<std::io::Error> for ReplayError {
-    fn from(e: std::io::Error) -> Self { ReplayError::Io(e) }
+    fn from(e: std::io::Error) -> Self {
+        ReplayError::Io(e)
+    }
 }
 
 impl From<serde_json::Error> for ReplayError {
-    fn from(e: serde_json::Error) -> Self { ReplayError::Json(e) }
+    fn from(e: serde_json::Error) -> Self {
+        ReplayError::Json(e)
+    }
 }
 
 impl From<RecordError> for ReplayError {
-    fn from(e: RecordError) -> Self { ReplayError::LoadFailed(Box::new(e)) }
+    fn from(e: RecordError) -> Self {
+        ReplayError::LoadFailed(Box::new(e))
+    }
 }
 
 /// Overall comparison status for a single sink.
@@ -204,25 +217,55 @@ pub struct DiffReport {
 
 impl std::fmt::Display for DiffReport {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        if self.regressions.is_empty() || self.regressions.iter().all(|r| r.status == DiffStatus::Match) {
+        if self.regressions.is_empty()
+            || self
+                .regressions
+                .iter()
+                .all(|r| r.status == DiffStatus::Match)
+        {
             write!(f, "No regressions detected.")?;
-            let matched = self.regressions.iter().filter(|r| r.status == DiffStatus::Match).count();
+            let matched = self
+                .regressions
+                .iter()
+                .filter(|r| r.status == DiffStatus::Match)
+                .count();
             if matched > 0 {
-                write!(f, " ({matched} sink{} match)", if matched == 1 { "" } else { "s" })?;
+                write!(
+                    f,
+                    " ({matched} sink{} match)",
+                    if matched == 1 { "" } else { "s" }
+                )?;
             }
             return Ok(());
         }
 
-        let bad: Vec<_> = self.regressions.iter().filter(|r| r.status != DiffStatus::Match).collect();
-        writeln!(f, "Regressions detected ({}/{} sinks affected):", bad.len(), self.regressions.len())?;
+        let bad: Vec<_> = self
+            .regressions
+            .iter()
+            .filter(|r| r.status != DiffStatus::Match)
+            .collect();
+        writeln!(
+            f,
+            "Regressions detected ({}/{} sinks affected):",
+            bad.len(),
+            self.regressions.len()
+        )?;
 
         for reg in bad {
-            write!(f, "\n  [{}] {}", reg.sink_id, match reg.status {
-                DiffStatus::Mismatch => format!("MISMATCH ({} differences)", reg.differences.len()),
-                DiffStatus::Missing => "MISSING — present in baseline but not in replay".to_string(),
-                DiffStatus::Extra => "EXTRA — present in replay but not in baseline".to_string(),
-                DiffStatus::Match => unreachable!(),
-            })?;
+            write!(
+                f,
+                "\n  [{}] {}",
+                reg.sink_id,
+                match reg.status {
+                    DiffStatus::Mismatch =>
+                        format!("MISMATCH ({} differences)", reg.differences.len()),
+                    DiffStatus::Missing =>
+                        "MISSING — present in baseline but not in replay".to_string(),
+                    DiffStatus::Extra =>
+                        "EXTRA — present in replay but not in baseline".to_string(),
+                    DiffStatus::Match => unreachable!(),
+                }
+            )?;
 
             for d in &reg.differences {
                 write!(f, "\n    {}: {:?} -> {:?}", d.path, d.baseline, d.current)?;
@@ -245,7 +288,11 @@ impl ReplayResult {
     /// Returns `true` if no regressions were found.
     pub fn is_clean(&self) -> bool {
         self.report.regressions.is_empty()
-            || self.report.regressions.iter().all(|r| r.status == DiffStatus::Match)
+            || self
+                .report
+                .regressions
+                .iter()
+                .all(|r| r.status == DiffStatus::Match)
     }
 
     /// Returns a reference to the diff report.
@@ -345,9 +392,9 @@ impl ReplaySession {
         }
 
         // Resolve timeout.
-        let timeout = self
-            .timeout_override
-            .unwrap_or(Duration::from_secs_f64(self.recording.metadata.timeout_secs.max(0.1)));
+        let timeout = self.timeout_override.unwrap_or(Duration::from_secs_f64(
+            self.recording.metadata.timeout_secs.max(0.1),
+        ));
 
         // Locate dora binary.
         let dora = find_dora_binary();
@@ -389,18 +436,16 @@ impl ReplaySession {
                     path: output_file.clone(),
                 });
             }
-            let contents = std::fs::read_to_string(output_file).map_err(|e| {
-                ReplayError::SinkReadError {
+            let contents =
+                std::fs::read_to_string(output_file).map_err(|e| ReplayError::SinkReadError {
                     sink_id: sink_id.clone(),
                     error: e.to_string(),
-                }
-            })?;
-            let value: serde_json::Value = serde_json::from_str(&contents).map_err(|e| {
-                ReplayError::SinkReadError {
+                })?;
+            let value: serde_json::Value =
+                serde_json::from_str(&contents).map_err(|e| ReplayError::SinkReadError {
                     sink_id: sink_id.clone(),
                     error: format!("invalid JSON: {e}"),
-                }
-            })?;
+                })?;
             current_sinks.insert(sink_id.clone(), value);
         }
 
@@ -657,8 +702,7 @@ fn compare_recordings(
     for (sink_id, baseline_value) in baseline {
         match current.get(sink_id) {
             Some(current_value) => {
-                let differences =
-                    compare_sink_outputs(sink_id, baseline_value, current_value);
+                let differences = compare_sink_outputs(sink_id, baseline_value, current_value);
                 regressions.push(SinkDiff {
                     sink_id: sink_id.clone(),
                     status: if differences.is_empty() {
@@ -835,11 +879,7 @@ fn compare_data_semantic(
 
     let mut diffs = Vec::new();
     for i in 0..b_len {
-        let result = sink::compare_semantic(
-            &[baseline_refs[i]],
-            &c_arrays[i..i + 1],
-            None,
-        );
+        let result = sink::compare_semantic(&[baseline_refs[i]], &c_arrays[i..i + 1], None);
         if !result.r#match {
             for d in &result.differences {
                 diffs.push(FieldDiff {
@@ -923,7 +963,9 @@ mod tests {
         let result = ReplayResult {
             baseline_sinks: sinks.clone(),
             current_sinks: sinks,
-            report: DiffReport { regressions: vec![] },
+            report: DiffReport {
+                regressions: vec![],
+            },
         };
         assert!(result.is_clean());
     }
@@ -950,7 +992,9 @@ mod tests {
 
     #[test]
     fn test_diffreport_display_clean() {
-        let report = DiffReport { regressions: vec![] };
+        let report = DiffReport {
+            regressions: vec![],
+        };
         let display = report.to_string();
         assert!(display.contains("No regressions"));
     }

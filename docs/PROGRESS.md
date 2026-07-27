@@ -73,8 +73,45 @@ migration separately).
 | 8 | Multi-output + classifier + 3 pipelines | ✅ |
 | 9 前半 | flume→tokio mpsc migration | ✅ |
 | 9 后半 | `RecordSession` implementation | ✅ |
+| 10 | `ReplaySession` implementation | ✅ |
 
-## Remaining Plan (Adjusted 2026-07-26)
+## Week 10 (2026-07-27): ReplaySession implementation
+
+### ReplaySession (new in `src/record.rs`)
+- **ReplaySession**: builder-pattern API — `load(json)` → `replay_sink(id, file)` → `with_timeout(dur)` → `run()`
+- **ReplayResult**: `is_clean()` / `diff()` / `assert_no_regression()`
+- **DiffReport**: structured regression report with `SinkDiff`/`FieldDiff`/`DiffStatus`
+- **ReplayError**: 10-variant error enum with Display + Error + From impls
+- **Two-layer comparison**: Layer 1: fast JSON structural diff; Layer 2: Arrow semantic comparison for `data` arrays (tolerates type differences)
+- Reuses RecordSession's `find_dora_binary()` and `dora run` infrastructure
+
+### Tests (7 unit + 8 e2e)
+| Type | Count | Location |
+|------|-------|----------|
+| Unit tests (comparison logic) | 7 | `src/record.rs` |
+| E2E tests | 8 | `tests/e2e_replay.rs` |
+
+### Commits
+| Commit | Description |
+|--------|-------------|
+| `c81efec` | feat(replay): add ReplayError type |
+| `b1a4f8a` | feat(replay): add DiffReport and supporting types |
+| `93a4439` | feat(replay): add ReplaySession struct and builder methods |
+| `2922e03` | feat(replay): implement ReplaySession::run() with two-layer comparison |
+| `b7d74fe` | fix(replay): address C1, C2, I3, M1 in comparison logic |
+| `11ac7d6` | test(replay): add unit tests for DiffReport and comparison logic |
+| `3234bf2` | test(replay): add 8 e2e tests for ReplaySession |
+
+### Verification
+- `cargo check` ✅
+- `cargo test --lib` ✅ (52/52 pass)
+- `cargo test --test e2e` ✅ (5/5 pass)
+- `cargo test --test e2e_replay -- --test-threads=1` ✅ (8/8 pass in 7.77s)
+- `cargo test --test smoke` ✅ (3/3 pass)
+- `cargo fmt --check` ✅
+- `cargo clippy --lib` ✅
+
+## Remaining Plan (Adjusted 2026-07-27)
 
 | Week | Dates (China, Mon–Sun) | Deliverable |
 |------|------|------|
