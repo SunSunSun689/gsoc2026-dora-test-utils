@@ -241,6 +241,14 @@ pub struct ReplayResult {
     pub report: DiffReport,
 }
 
+impl ReplayResult {
+    /// Returns `true` if no regressions were found.
+    pub fn is_clean(&self) -> bool {
+        self.report.regressions.is_empty()
+            || self.report.regressions.iter().all(|r| r.status == DiffStatus::Match)
+    }
+}
+
 /// A replay session for regression testing a DORA dataflow.
 ///
 /// Created via [`ReplaySession::load`], configured with sinks and optional
@@ -861,4 +869,92 @@ fn json_to_arrow_arrays(value: &serde_json::Value) -> Result<Vec<arrow::array::A
         result.push(arr);
     }
     Ok(result)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_compare_identical() {
+        let baseline: serde_json::Value = serde_json::json!({"data": [1, 2, 3], "count": 3});
+        let current = baseline.clone();
+        let diffs = compare_sink_outputs("test", &baseline, &current);
+        assert!(diffs.is_empty(), "identical outputs should have no diffs");
+    }
+
+    #[test]
+    fn test_compare_count_diff() {
+        let baseline = serde_json::json!({"data": [1, 2, 3], "count": 3});
+        let current = serde_json::json!({"data": [1, 2, 3], "count": 4});
+        let diffs = compare_sink_outputs("test", &baseline, &current);
+        assert_eq!(diffs.len(), 1);
+        assert!(diffs[0].path.contains("count"));
+    }
+
+    #[test]
+    fn test_compare_data_diff() {
+        let baseline = serde_json::json!({"data": [1, 2, 3], "count": 3});
+        let current = serde_json::json!({"data": [1, 2, 99], "count": 3});
+        let diffs = compare_sink_outputs("test", &baseline, &current);
+        assert!(!diffs.is_empty(), "data difference should be detected");
+    }
+
+    #[test]
+    fn test_replay_result_is_clean() {
+        let mut sinks = HashMap::new();
+        sinks.insert("s1".into(), serde_json::json!({"count": 1}));
+        let result = ReplayResult {
+            baseline_sinks: sinks.clone(),
+            current_sinks: sinks,
+            report: DiffReport { regressions: vec![] },
+        };
+        assert!(result.is_clean());
+    }
+
+    #[test]
+    fn test_replay_result_assert_panics_on_regression() {
+        let mut baseline = HashMap::new();
+        baseline.insert("s1".into(), serde_json::json!({"count": 1}));
+        let current = HashMap::new();
+        let report = DiffReport {
+            regressions: vec![SinkDiff {
+                sink_id: "s1".into(),
+                status: DiffStatus::Missing,
+                differences: vec![],
+            }],
+        };
+        let result = ReplayResult {
+            baseline_sinks: baseline,
+            current_sinks: current,
+            report,
+        };
+        assert!(!result.is_clean());
+    }
+
+    #[test]
+    fn test_diffreport_display_clean() {
+        let report = DiffReport { regressions: vec![] };
+        let display = report.to_string();
+        assert!(display.contains("No regressions"));
+    }
+
+    #[test]
+    fn test_diffreport_display_mismatch() {
+        let report = DiffReport {
+            regressions: vec![SinkDiff {
+                sink_id: "s1".into(),
+                status: DiffStatus::Mismatch,
+                differences: vec![FieldDiff {
+                    path: "count".into(),
+                    baseline: serde_json::json!(3),
+                    current: serde_json::json!(4),
+                }],
+            }],
+        };
+        let display = report.to_string();
+        assert!(display.contains("Regressions detected"));
+        assert!(display.contains("MISMATCH"));
+        assert!(display.contains("count"));
+    }
 }
