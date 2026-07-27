@@ -16,16 +16,6 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
-      - run: git clone https://github.com/dora-rs/dora.git dora && git -C dora checkout 45436aad124fe46463d0b0411e3922dae8ee9ebd
-        working-directory: ${{ github.workspace }}
-      - run: git -C dora apply ../dora-patches/testing-input-channel.patch
-
-      # Cache dora build artifacts so we don't recompile from scratch.
-      - uses: actions/cache@v4
-        with:
-          path: dora/target
-          key: dora-target-${{ runner.os }}-${{ hashFiles('dora/**/*.rs', 'dora/**/Cargo.toml') }}
-
       - run: cargo check
 
   test:
@@ -35,24 +25,13 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
-      - run: git clone https://github.com/dora-rs/dora.git dora && git -C dora checkout 45436aad124fe46463d0b0411e3922dae8ee9ebd
-        working-directory: ${{ github.workspace }}
-      - run: git -C dora apply ../dora-patches/testing-input-channel.patch
 
-      # Cache dora build artifacts so we don't recompile from scratch.
-      - uses: actions/cache@v4
-        with:
-          path: dora/target
-          key: dora-target-${{ runner.os }}-${{ hashFiles('dora/**/*.rs', 'dora/**/Cargo.toml') }}
-
-      # All tests now pass with default parallelism — flume→tokio mpsc
-      # migration (dora-rs/dora#1603) eliminated the spinlock deadlock.
+      # Deferred-init NodeHarness feeds baked events via TestingInput::Input —
+      # no live channel, no daemon-thread deadlock (dora-rs/dora#2855).
+      # Tests run with default parallelism; e2e/smoke are fast (<0.02s each).
       - run: cargo test --lib
-      # e2e and smoke tests run NodeHarness which spawns daemon threads.
-      # Parallel execution (>2 threads) hits an intermittent deadlock on
-      # low-CPU CI runners — run them serially (only add ~3s per suite).
-      - run: cargo test --test e2e -- --test-threads=1
-      - run: cargo test --test smoke -- --test-threads=1
+      - run: cargo test --test e2e
+      - run: cargo test --test smoke
 
   clippy:
     name: cargo clippy
@@ -62,16 +41,6 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy
-      - run: git clone https://github.com/dora-rs/dora.git dora && git -C dora checkout 45436aad124fe46463d0b0411e3922dae8ee9ebd
-        working-directory: ${{ github.workspace }}
-      - run: git -C dora apply ../dora-patches/testing-input-channel.patch
-
-      # Cache dora build artifacts so we don't recompile from scratch.
-      - uses: actions/cache@v4
-        with:
-          path: dora/target
-          key: dora-target-${{ runner.os }}-${{ hashFiles('dora/**/*.rs', 'dora/**/Cargo.toml') }}
-
       - run: cargo clippy -- -D warnings
 
   fmt:
@@ -91,10 +60,10 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
 
+      # DORA CLI is needed for `dora run` in integration + record tests.
+      # dora-node-api is pulled as a git dep (Cargo.toml) — no patch needed.
       - run: git clone https://github.com/dora-rs/dora.git dora && git -C dora checkout 45436aad124fe46463d0b0411e3922dae8ee9ebd
         working-directory: ${{ github.workspace }}
-
-      - run: git -C dora apply ../dora-patches/testing-input-channel.patch
 
       # Cache dora build artifacts — keyed on dora source hash so the
       # cache hits every run after the first (commit is locked).
@@ -113,3 +82,5 @@ jobs:
 
       # Run integration tests serially (dora daemon binds port 6013).
       - run: cargo test --test integration -- --test-threads=1
+      # Record/replay e2e tests (need dora CLI + test binaries built above).
+      - run: timeout 120 cargo test --test e2e_record -- --test-threads=1

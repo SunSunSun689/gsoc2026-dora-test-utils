@@ -4,39 +4,41 @@
 //!
 //! `NodeHarness` wraps a DORA node created via
 //! [`DoraNode::init_testing()`][init] and drives it with programmatic
-//! inputs via in-memory channels.  Unlike the file-based
-//! `IntegrationTestInput` workflow, this harness works inside a
-//! standard `#[test]` function with zero external setup (NOT
-//! `#[tokio::test]` — see [`tick`](NodeHarness::tick)).
+//! inputs.  Unlike the file-based `IntegrationTestInput` workflow, this
+//! harness works inside a standard `#[test]` function with zero external
+//! setup (NOT `#[tokio::test]` — see [`tick`](NodeHarness::tick)).
 //!
-//! **Inputs** are injected at runtime through a live
-//! [`TestingInput::Channel`]; **outputs** are captured through
-//! [`TestingOutput::ToChannel`].  This gives test code complete
-//! control over what the node receives and the ability to assert on
-//! everything it produces.
+//! **Inputs** are buffered as [`TimedIncomingEvent`]s and fed to DORA
+//! as a batch via [`TestingInput::Input`] when the harness is first
+//! driven (`tick` / `run_to_completion` / `send_output`).  This
+//! "deferred init" pattern avoids the need for a live runtime channel
+//! and eliminates the daemon-thread deadlock that a live channel
+//! introduces (the daemon blocks on `next_event()` waiting for input
+//! that hasn't been sent yet, while `DoraNode::drop()` waits for the
+//! daemon to reply — dora-rs/dora#2855).
+//!
+//! **Outputs** are captured through [`TestingOutput::ToChannel`].
 //!
 //! [init]: https://docs.rs/dora-node-api/latest/dora_node_api/struct.DoraNode.html#method.init_testing
 //!
 //! ## Architecture
 //!
 //! ```text
-//! ┌──────────────────┐  tokio mpsc (input)     ┌──────────────────┐
-//! │   Test code      │ ──────────────────────▶ │  DORA node       │
-//! │  send_input()    │                         │  (the thing      │
-//! │  tick()          │                         │   under test)    │
-//! │  recv_output() ◀─│── tokio mpsc (output)───│                  │
+//! ┌──────────────────┐                         ┌──────────────────┐
+//! │   Test code      │  buffer events          │  DORA node       │
+//! │  send_data()     │ ──────▶ Vec ──────▶     │  (the thing      │
+//! │  send_stop()     │         (deferred)       │   under test)    │
+//! │  tick()          │ ◀─────────────────────── │                  │
+//! │  recv_output() ◀─│── flume (output) ───────│                  │
 //! └──────────────────┘                         └──────────────────┘
 //! ```
-//!
-//! The harness uses [`TestingInput::Channel`] (added upstream in
-//! dora-rs for this project) to inject events at runtime, and
-//! [`TestingOutput::ToChannel`] to capture outputs.
 
 use std::collections::HashMap;
 
 use dora_node_api::{
     integration_testing::{
-        integration_testing_format::TimedIncomingEvent, TestingInput, TestingOptions, TestingOutput,
+        integration_testing_format::TimedIncomingEvent, IntegrationTestInput, TestingInput,
+        TestingOptions, TestingOutput,
     },
     DoraNode, Event, EventStream, NodeError,
 };
@@ -56,13 +58,13 @@ use dora_node_api::{
 ///     let mut harness = NodeHarness::new()
 ///         .expect("failed to create harness");
 ///
-///     // Inject an input event.
+///     // Buffer an input event (deferred — node not created yet).
 ///     harness.send_input(TimedIncomingEvent {
 ///         time_offset_secs: 0.0,
 ///         event: IncomingEvent::Stop,
 ///     });
 ///
-///     // Drive one iteration (blocking — init_testing uses blocking_recv).
+///     // First tick: node is created lazily with all buffered events.
 ///     harness.tick();
 ///
 ///     // Assert outputs.
@@ -71,92 +73,63 @@ use dora_node_api::{
 /// }
 /// ```
 pub struct NodeHarness {
-    // ── Drop-order note ───────────────────────────────────────────
-    // Rust drops struct fields in declaration order (top to bottom).
-    // `input_tx` MUST be dropped before `event_stream` and `node`:
-    // dropping the sender disconnects the tokio mpsc input channel, which
-    // unblocks the daemon thread's `rx.recv()`, allowing it to process
-    // `EventStreamDropped` and `OutputsDone` during the subsequent
-    // `event_stream`/`node` drops.
-    //
-    // DO NOT reorder these fields without understanding the two-thread
-    // cleanup protocol described above.
-    /// Sender for runtime event injection.
-    /// Wrapped in `Option` so [`close_input`](Self::close_input) can drop the sender
-    /// to unblock the daemon thread, making [`send_output`](Self::send_output) safe.
-    pub(crate) input_tx: Option<tokio::sync::mpsc::Sender<TimedIncomingEvent>>,
+    /// Buffered input events — pushed by `send_data`/`send_stop`/`send_input`,
+    /// consumed by [`ensure_init`](Self::ensure_init) when the node is first
+    /// driven.
+    pending_events: Vec<TimedIncomingEvent>,
+    /// Output channel sender.  Created eagerly in [`new`](Self::new) so
+    /// `recv_output` works before init; consumed by `ensure_init`.
+    output_tx: Option<flume::Sender<serde_json::Map<String, serde_json::Value>>>,
     /// Receiver for outputs captured via [`TestingOutput::ToChannel`].
-    pub(crate) output_rx: tokio::sync::mpsc::Receiver<serde_json::Map<String, serde_json::Value>>,
+    output_rx: flume::Receiver<serde_json::Map<String, serde_json::Value>>,
     /// Buffered outputs indexed by output ID (the `"id"` field in each
     /// JSON output map).
-    pub(crate) output_buffers: HashMap<String, Vec<serde_json::Map<String, serde_json::Value>>>,
-    /// The event stream returned by [`DoraNode::init_testing`].
-    pub(crate) event_stream: EventStream,
-    /// The DORA node under test, created via [`DoraNode::init_testing`].
-    ///
-    /// The node runs in a background thread; this handle is kept for
-    /// future use (e.g. `send_output`, graceful shutdown).
-    pub(crate) node: DoraNode,
+    output_buffers: HashMap<String, Vec<serde_json::Map<String, serde_json::Value>>>,
+    /// The DORA node under test — created lazily on first `tick` /
+    /// `run_to_completion` / `send_output`.
+    node: Option<DoraNode>,
+    /// The event stream — created lazily with the node.
+    event_stream: Option<EventStream>,
 }
 
 impl NodeHarness {
-    /// Create a new harness with live input and output channels.
+    /// Create a new harness.
     ///
-    /// Initializes the DORA node in testing mode via
-    /// [`DoraNode::init_testing`] with [`TestingInput::Channel`]
-    /// and [`TestingOutput::ToChannel`].
+    /// The DORA node is **not** created immediately.  Events are buffered
+    /// until the first call to [`tick`](Self::tick),
+    /// [`run_to_completion`](Self::run_to_completion), or
+    /// [`send_output`](Self::send_output), at which point the node is
+    /// constructed with all buffered events via [`TestingInput::Input`].
     ///
     /// # Errors
     ///
-    /// Returns a [`NodeError`] if the underlying
-    /// [`DoraNode::init_testing`] call fails.
+    /// Returns a [`NodeError`] if the output channel cannot be created.
+    /// (In practice this never fails for an unbounded flume channel.)
     pub fn new() -> Result<Self, NodeError> {
-        // ── Input channel: runtime event injection ─────────────────
-        // Bounded (large capacity) — test code controls pacing, and
-        // TestingInput::Channel requires tokio::sync::mpsc::Receiver.
-        let (input_tx, input_rx) = tokio::sync::mpsc::channel::<TimedIncomingEvent>(1024);
-
-        // ── Output channel: capture real node outputs ──────────────
-        let (output_tx, output_rx) =
-            tokio::sync::mpsc::channel::<serde_json::Map<String, serde_json::Value>>(256);
-
-        let inputs = TestingInput::Channel(input_rx);
-        let outputs = TestingOutput::ToChannel(output_tx);
-        let options = TestingOptions {
-            skip_output_time_offsets: true,
-        };
-
-        let (node, event_stream) = DoraNode::init_testing(inputs, outputs, options)?;
+        // Unbounded flume channel for output capture.
+        // Upstream `TestingOutput::ToChannel` uses `flume::Sender` (the
+        // tokio-mpsc migration is pending in a separate upstream PR).
+        let (output_tx, output_rx) = flume::unbounded();
 
         Ok(Self {
-            input_tx: Some(input_tx),
+            pending_events: Vec::new(),
+            output_tx: Some(output_tx),
             output_rx,
             output_buffers: HashMap::new(),
-            event_stream,
-            node,
+            node: None,
+            event_stream: None,
         })
     }
 
-    /// Inject a synthetic input event at runtime.
+    /// Inject a synthetic input event.
     ///
-    /// The event is delivered to the node through the live
-    /// [`TestingInput::Channel`].  The node receives it on its next
-    /// [`EventStream::recv`] call.
-    ///
-    /// # Panics
-    ///
-    /// Panics if [`close_input`](Self::close_input) was already called
-    /// (the input sender has been dropped).  Also panics if the node's
-    /// background thread has terminated (channel disconnected).
+    /// The event is **buffered**, not delivered immediately.  The DORA node
+    /// is created lazily on the first [`tick`](Self::tick) /
+    /// [`run_to_completion`](Self::run_to_completion) /
+    /// [`send_output`](Self::send_output) call, at which point all buffered
+    /// events are fed at once via [`TestingInput::Input`].
     pub fn send_input(&mut self, event: TimedIncomingEvent) {
-        self.input_tx
-            .as_ref()
-            .expect("NodeHarness: input channel closed — close_input() was already called")
-            .blocking_send(event)
-            .expect("NodeHarness: input channel disconnected — node may have panicked");
-        // Force a context switch to let the daemon + event stream
-        // threads process the event before tick() blocks.
-        std::thread::sleep(std::time::Duration::from_millis(500));
+        self.pending_events.push(event);
     }
 
     /// Convenience: inject input data by ID.
@@ -168,14 +141,8 @@ impl NodeHarness {
     ///
     /// # Panics
     ///
-    /// Panics if [`close_input`](Self::close_input) was already called,
-    /// if the channel is disconnected, or if `input_id` is not a valid
+    /// Panics if `input_id` is not a valid
     /// [`DataId`](dora_node_api::DataId).
-    ///
-    /// After calling this method, the input channel is still open. To safely
-    /// call [`send_output`](Self::send_output) afterward, you must first
-    /// close the input channel via [`close_input`](Self::close_input) or
-    /// [`run_to_completion`](Self::run_to_completion).
     ///
     /// # Example
     ///
@@ -204,8 +171,9 @@ impl NodeHarness {
         });
     }
 
-    /// Convenience: inject a [`Stop`](dora_node_api::integration_testing::integration_testing_format::IncomingEvent::Stop)
-    /// event (delivered immediately).
+    /// Convenience: inject a [`Stop`] event.
+    ///
+    /// The event is buffered and delivered when the node is first driven.
     pub fn send_stop(&mut self) {
         self.send_input(TimedIncomingEvent {
             time_offset_secs: 0.0,
@@ -214,29 +182,22 @@ impl NodeHarness {
         });
     }
 
-    /// Close the input channel, unblocking the daemon thread.
+    /// Close the input side.
     ///
-    /// After calling this, no more inputs can be sent via
-    /// [`send_input`](Self::send_input). But [`send_output`](Self::send_output)
-    /// and [`recv_output`](Self::recv_output) become safe to call without
-    /// risk of deadlock — the daemon thread's `rx.blocking_recv()` returns
-    /// `None` and it resumes processing `DaemonRequest::SendMessage`.
-    ///
-    /// [`run_to_completion`](Self::run_to_completion) calls this automatically
-    /// after the event stream is exhausted.
+    /// With the deferred-init model there is no live input channel, so this
+    /// is a no-op.  Kept for API compatibility with code that calls
+    /// `close_input()` before `send_output()`.
     pub fn close_input(&mut self) {
-        self.input_tx.take();
+        // No live channel to close — inputs are buffered and consumed
+        // atomically by ensure_init().
     }
 
     /// Send an output from the node under test.
     ///
-    /// Delegates to the underlying [`DoraNode::send_output`].  The output is
-    /// captured by [`TestingOutput::ToChannel`] and can be retrieved via
+    /// Triggers deferred node creation if not already done.  Delegates to
+    /// the underlying [`DoraNode::send_output`].  The output is captured by
+    /// [`TestingOutput::ToChannel`] and can be retrieved via
     /// [`recv_output`](Self::recv_output).
-    ///
-    /// This method automatically calls [`close_input`](Self::close_input) to
-    /// unblock the daemon thread before sending.  After this method returns,
-    /// no more inputs can be sent via [`send_input`](Self::send_input).
     ///
     /// # Errors
     ///
@@ -247,39 +208,41 @@ impl NodeHarness {
         output_id: &str,
         data: impl arrow::array::Array,
     ) -> Result<(), NodeError> {
-        // Parse the output_id before closing the input channel, so that
-        // a parse error doesn't leave the input channel permanently closed
-        // (which would break subsequent send_input / send_data calls).
         let data_id = output_id
             .parse()
             .map_err(|e| NodeError::Output(format!("invalid output_id '{output_id}': {e}")))?;
 
-        // Close the input channel to unblock the daemon thread.  The daemon
-        // is single-threaded and blocks on NextEvent → rx.blocking_recv().
-        // Dropping the sender causes blocking_recv() to return None, the daemon
-        // returns to its request loop, and our SendMessage becomes processable.
-        self.close_input();
-        std::thread::sleep(std::time::Duration::from_millis(50));
-
-        self.node.send_output(data_id, Default::default(), data)
+        self.ensure_init();
+        self.node
+            .as_mut()
+            .expect("NodeHarness: node not initialized")
+            .send_output(data_id, Default::default(), data)
     }
 
     /// Drive the node to process **one** event from the [`EventStream`].
+    ///
+    /// If the node hasn't been created yet, this triggers deferred
+    /// initialization with all buffered events.
     ///
     /// After the event is received, any outputs produced by the node
     /// are collected into the internal buffers (accessible via
     /// [`recv_output`](Self::recv_output)).
     ///
     /// Returns the event that was processed, or `None` if the stream
-    /// is exhausted (i.e. the input channel was closed and all events
-    /// have been consumed).
+    /// is exhausted.
     ///
     /// This is a **synchronous** call: `init_testing()` uses
     /// `blocking_recv` internally and cannot run inside a tokio
     /// runtime.  Use `#[test]` (not `#[tokio::test]`) for tests
     /// that drive the harness.
     pub fn tick(&mut self) -> Option<Event> {
-        let event = self.event_stream.recv();
+        self.ensure_init();
+
+        let stream = self
+            .event_stream
+            .as_mut()
+            .expect("NodeHarness: event_stream not initialized");
+        let event = stream.recv();
 
         // Collect any outputs the node produced during this tick.
         self.collect_pending_outputs();
@@ -304,14 +267,12 @@ impl NodeHarness {
     /// is exhausted, a [`Stop`](Event::Stop) is received, or an
     /// [`InputClosed`](Event::InputClosed) arrives.
     ///
-    /// A [`Stop`](Event::Stop) is injected automatically at the end of the
-    /// input queue, so callers do not need to pre-load one — the method
-    /// always terminates.  If caller already sent a Stop, the extra one is
-    /// harmless (consumed after the stream ends).
+    /// A [`Stop`](Event::Stop) is injected automatically, so callers do not
+    /// need to pre-load one.  If the caller already buffered a Stop, the
+    /// extra one is harmless.
     ///
     /// Returns all events processed during the run, up to and including the
     /// first terminal event.  After this method returns,
-    /// [`close_input`](Self::close_input) has been called automatically —
     /// [`send_output`](Self::send_output) and
     /// [`recv_output`](Self::recv_output) are safe to use.
     ///
@@ -321,32 +282,72 @@ impl NodeHarness {
     /// let events = harness.run_to_completion();
     /// assert!(events.iter().any(|e| matches!(e, Event::Stop(..))));
     ///
-    /// // Now safe: daemon thread is unblocked
+    /// // Now safe: daemon is idle, outputs can be sent
     /// harness.send_output("out", my_array).unwrap();
     /// let outputs = harness.recv_output("out");
     /// ```
     pub fn run_to_completion(&mut self) -> Vec<Event> {
-        // Inject Stop at end of queue so the daemon thread never blocks
-        // indefinitely in next_event() → rx.recv().  If the caller already
-        // sent a Stop, the extra one is silently consumed after termination.
+        // Inject Stop so the event stream always terminates.
         self.send_stop();
+        self.ensure_init();
+
+        let stream = self
+            .event_stream
+            .as_mut()
+            .expect("NodeHarness: event_stream not initialized");
         let mut events = Vec::new();
-        while let Some(event) = self.tick() {
-            let is_stop = matches!(event, Event::Stop(..));
-            let is_input_closed = matches!(event, Event::InputClosed { .. });
-            events.push(event);
-            if is_stop || is_input_closed {
-                break;
+        loop {
+            let event = stream.recv();
+            match event {
+                Some(ref e) => {
+                    let is_stop = matches!(e, Event::Stop(..));
+                    let is_input_closed = matches!(e, Event::InputClosed { .. });
+                    events.push(event.unwrap());
+                    if is_stop || is_input_closed {
+                        break;
+                    }
+                }
+                None => break,
             }
         }
-        // Unblock the daemon thread so send_output won't deadlock.
-        self.close_input();
+        self.collect_pending_outputs();
         events
     }
 
     // ── private helpers ────────────────────────────────────────────
 
-    /// Collect all pending outputs from the tokio::sync::mpsc channel into
+    /// Create the DORA node if it hasn't been created yet.
+    ///
+    /// Consumes all buffered events and feeds them as
+    /// [`TestingInput::Input`] so that the daemon thread processes them
+    /// without ever blocking on a live input channel.
+    fn ensure_init(&mut self) {
+        if self.node.is_some() {
+            return;
+        }
+
+        let events = std::mem::take(&mut self.pending_events);
+        let input = IntegrationTestInput::new("test-node".parse().unwrap(), events);
+        let tx = self
+            .output_tx
+            .take()
+            .expect("NodeHarness: output_tx already consumed");
+        let options = TestingOptions {
+            skip_output_time_offsets: true,
+        };
+
+        let (node, event_stream) = DoraNode::init_testing(
+            TestingInput::Input(input),
+            TestingOutput::ToChannel(tx),
+            options,
+        )
+        .expect("NodeHarness: DoraNode::init_testing failed");
+
+        self.node = Some(node);
+        self.event_stream = Some(event_stream);
+    }
+
+    /// Collect all pending outputs from the flume channel into
     /// `output_buffers`, indexed by the `"id"` field in each JSON map.
     fn collect_pending_outputs(&mut self) {
         while let Ok(output) = self.output_rx.try_recv() {
@@ -367,15 +368,9 @@ impl NodeHarness {
     }
 }
 
-impl Drop for NodeHarness {
-    fn drop(&mut self) {
-        // close_input() drops the tokio mpsc sender, which disconnects
-        // the channel and causes the daemon thread's blocking_recv() to
-        // return None.  tokio::sync::mpsc uses std::sync::Mutex — no
-        // spinlock, so drop completes without deadlock.
-        self.close_input();
-    }
-}
+// No custom Drop needed — with deferred init, the node + event_stream
+// are dropped in declaration order, and the daemon thread exits cleanly
+// because all events were pre-baked (no live channel to get stuck on).
 
 #[cfg(test)]
 mod tests {
@@ -387,7 +382,7 @@ mod tests {
 
         harness.send_data("test_id", serde_json::json!([1, 2, 3]));
 
-        // After send_data, the input should be queued. Drive with tick.
+        // First tick triggers deferred init and returns the buffered Input.
         let event = harness.tick().expect("should receive Input event");
         match event {
             dora_node_api::Event::Input { id, data, .. } => {
@@ -415,13 +410,5 @@ mod tests {
             }
             other => panic!("expected Input event, got {other:?}"),
         }
-    }
-
-    #[test]
-    #[should_panic(expected = "NodeHarness: input channel closed")]
-    fn ztest_send_data_panics_after_close_input() {
-        let mut harness = NodeHarness::new().expect("harness should be created");
-        harness.close_input();
-        harness.send_data("x", serde_json::json!(42));
     }
 }

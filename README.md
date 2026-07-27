@@ -96,7 +96,8 @@ test-source --output data_a:a.json --output data_b:b.json
 
 - Rust 工具链
 - 本仓库 clone 到本地
-- dora CLI（vendored，在 `dora/target/debug/dora`）
+- dora CLI（可通过 `cargo install dora-cli --git https://github.com/dora-rs/dora.git` 安装，或从 PATH 获取）
+  - 集成测试和 record/replay 测试需要 `dora run` 命令
 
 ### 编译所有二进制
 
@@ -148,17 +149,16 @@ tests/
 ├── e2e.rs          # 端到端测试 (5)
 ├── integration.rs  # 集成测试 (6)
 └── smoke.rs        # 冒烟测试 (3)
-dora/               # vendored dora 源码
-dora-patches/       # 我们给 dora 打的补丁
-docs/               # 设计文档、进度记录
+docs/               # 设计文档、进度记录、upstream PR 计划
 ```
 
-## 测试统计（Week 8）
+## 测试统计（Week 10）
 
 | 类别 | 数量 |
 |------|------|
-| 库单元测试 | 42 |
-| 端到端测试 | 5 |
+| 库单元测试 | 45 |
+| 端到端测试 (e2e) | 5 |
+| Record/Replay 测试 (e2e_record) | 4 |
 | 集成测试 | 6 |
 | 冒烟测试 | 3 |
 | Mock 测试 | 6 |

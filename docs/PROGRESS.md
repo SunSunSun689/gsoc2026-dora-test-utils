@@ -1,5 +1,66 @@
 # Progress Log
 
+## DORA Version
+
+**Pinned**: `45436aad124fe46463d0b0411e3922dae8ee9ebd`
+**Confirmed**: 2026-06-01 Weekly Sync (Discussion #17), mentor ZhangHanDong
+**Reason**: Stable baseline for all development; predates v1.0.0-rc.1
+**Dependency**: `dora-node-api = { git = "...", rev = "45436aad..." }` (git dep, no vendored clone)
+**Upstream tracking**: [dora-rs/dora#2855](https://github.com/dora-rs/dora/issues/2855)
+
+> On 2026-07-27 we evaluated upgrading to v1.0.0-rc.4 and latest main.
+> The patch applies cleanly to both, but rc.4 upgrades arrow 58→59
+> and latest main adds `dora-examples` workspace member.  Decision: stay
+> on mentor-confirmed `45436aad` until mentor approves a version bump.
+
+## Week 9 后半 (2026-07-27): Removed vendored DORA patch (mentor Option 1)
+
+### Context
+
+Mentor ZhangHanDong recommended in Discussion #20 (Week 3) and confirmed in
+Discussion #28 (Week 7): drop `TestingInput::Channel` live-runtime-injection,
+use baked events (`TestingInput::Input`) with deferred node construction.
+This eliminates the daemon-thread deadlock, removes the vendored dora fork,
+and lets the crate build from a clean `git clone` + `cargo test`.
+
+### Changes
+
+- **`Cargo.toml`**: `dora-node-api` from `path = "dora/apis/rust/node"` to
+  `git = "https://github.com/dora-rs/dora.git", rev = "45436aad..."`.
+  Added `flume = "0.10"` for output channel (upstream default for
+  `TestingOutput::ToChannel`).
+- **`src/harness.rs`**: Complete refactor to deferred-init model.
+  `new()` no longer creates a DoraNode — it only creates the output channel.
+  `send_data`/`send_stop`/`send_input` buffer events into a `Vec`.
+  `tick`/`run_to_completion`/`send_output` call `ensure_init()` which creates
+  the node lazily with `TestingInput::Input(IntegrationTestInput::new(...))`.
+  Removed `input_tx` (no live channel), removed Drop impl (no cleanup needed),
+  removed 500ms sleep in `send_input` (not needed without live channel).
+  `close_input()` is now a no-op (kept for API compatibility).
+- **`.github/workflows/ci.yml`**: Removed `git clone dora` + `git apply` +
+  `dora/target` cache from `check`, `test`, `clippy` jobs.  Only
+  `integration-test` keeps the dora clone (needs CLI binary).  e2e/smoke
+  tests now run with default parallelism — no `--test-threads=1` needed.
+- **`dora-patches/`**: Deleted.  The vendored patch is no longer needed.
+- **`src/lib.rs`**: Updated docs to reflect deferred-init model.
+
+### Results
+
+| Metric | Before | After |
+|--------|--------|-------|
+| dora dep | vendored path + patch | git dep, clean checkout |
+| e2e serial | 4.23s (2/10 hang) | 0.01s (0/10 hang) |
+| e2e parallel | hangs (deadlock) | 0.00s (no --test-threads needed) |
+| Clean build | ❌ (needs dora clone + patch) | ✅ (cargo fetch only) |
+| CI steps | 4 jobs clone+patch dora | 0 (only integration-test clones dora) |
+
+### Mentor alignment
+
+This refactor follows the mentor's explicit direction from Discussion #20
+(Option 1 — baked events + deferred init) and Discussion #28 (remove
+vendored Channel patch, submit upstream PR for ToChannel flume→tokio
+migration separately).
+
 ## Completed
 
 | Week | Content | Status |
