@@ -85,11 +85,11 @@ migration separately).
 - **Two-layer comparison**: Layer 1: fast JSON structural diff; Layer 2: Arrow semantic comparison for `data` arrays (tolerates type differences)
 - Reuses RecordSession's `find_dora_binary()` and `dora run` infrastructure
 
-### Tests (7 unit + 8 e2e)
+### Tests (7 unit + 11 e2e)
 | Type | Count | Location |
 |------|-------|----------|
 | Unit tests (comparison logic) | 7 | `src/record.rs` |
-| E2E tests | 8 | `tests/e2e_replay.rs` |
+| E2E tests | 11 | `tests/e2e_replay.rs` |
 
 ### Commits
 | Commit | Description |
@@ -101,12 +101,15 @@ migration separately).
 | `b7d74fe` | fix(replay): address C1, C2, I3, M1 in comparison logic |
 | `11ac7d6` | test(replay): add unit tests for DiffReport and comparison logic |
 | `3234bf2` | test(replay): add 8 e2e tests for ReplaySession |
+| `8ce3915` | chore: fmt, update PROGRESS.md + API stability table |
+| `6075132` | fix(replay): critical — starts_with(".data") for Arrow semantic fallback |
+| `5462bc8` | test(replay): add timeout override, Missing, Extra e2e tests |
 
 ### Verification
 - `cargo check` ✅
 - `cargo test --lib` ✅ (52/52 pass)
 - `cargo test --test e2e` ✅ (5/5 pass)
-- `cargo test --test e2e_replay -- --test-threads=1` ✅ (8/8 pass in 7.77s)
+- `cargo test --test e2e_replay -- --test-threads=1` ✅ (11/11 pass)
 - `cargo test --test smoke` ✅ (3/3 pass)
 - `cargo fmt --check` ✅
 - `cargo clippy --lib` ✅
