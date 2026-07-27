@@ -161,6 +161,76 @@ impl From<RecordError> for ReplayError {
     fn from(e: RecordError) -> Self { ReplayError::LoadFailed(Box::new(e)) }
 }
 
+/// Overall comparison status for a single sink.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub enum DiffStatus {
+    /// Sink outputs match baseline exactly.
+    Match,
+    /// Sink outputs differ from baseline.
+    Mismatch,
+    /// Sink present in baseline but missing in replay.
+    Missing,
+    /// Sink present in replay but not in baseline.
+    Extra,
+}
+
+/// A single field-level difference.
+#[derive(Debug, Clone, Serialize)]
+pub struct FieldDiff {
+    /// JSON path to the differing field, e.g. "data[2]" or "count".
+    pub path: String,
+    /// Value in the baseline recording.
+    pub baseline: serde_json::Value,
+    /// Value in the current (replay) run.
+    pub current: serde_json::Value,
+}
+
+/// Comparison result for one sink.
+#[derive(Debug, Clone, Serialize)]
+pub struct SinkDiff {
+    pub sink_id: String,
+    pub status: DiffStatus,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub differences: Vec<FieldDiff>,
+}
+
+/// Complete regression report.
+#[derive(Debug, Clone, Serialize)]
+pub struct DiffReport {
+    pub regressions: Vec<SinkDiff>,
+}
+
+impl std::fmt::Display for DiffReport {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        if self.regressions.is_empty() || self.regressions.iter().all(|r| r.status == DiffStatus::Match) {
+            write!(f, "No regressions detected.")?;
+            let matched = self.regressions.iter().filter(|r| r.status == DiffStatus::Match).count();
+            if matched > 0 {
+                write!(f, " ({matched} sink{} match)", if matched == 1 { "" } else { "s" })?;
+            }
+            return Ok(());
+        }
+
+        let bad: Vec<_> = self.regressions.iter().filter(|r| r.status != DiffStatus::Match).collect();
+        writeln!(f, "Regressions detected ({}/{} sinks affected):", bad.len(), self.regressions.len())?;
+
+        for reg in bad {
+            write!(f, "\n  [{}] {}", reg.sink_id, match reg.status {
+                DiffStatus::Mismatch => format!("MISMATCH ({} differences)", reg.differences.len()),
+                DiffStatus::Missing => "MISSING — present in baseline but not in replay".to_string(),
+                DiffStatus::Extra => "EXTRA — present in replay but not in baseline".to_string(),
+                DiffStatus::Match => unreachable!(),
+            })?;
+
+            for d in &reg.differences {
+                write!(f, "\n    {}: {:?} -> {:?}", d.path, d.baseline, d.current)?;
+            }
+            writeln!(f)?;
+        }
+        Ok(())
+    }
+}
+
 /// A recording session for a DORA dataflow.
 ///
 /// Created via [`RecordSession::attach`], configured with sinks and timeout,
