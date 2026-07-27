@@ -18,15 +18,26 @@ eyre = "0.6"
 serde = { version = "1", features = ["derive"] }
 
 # DORA node API — the primary integration surface.
-# Pinned to commit 45436aad (2026-06-07 snapshot).
-# TEMPORARY: use local dora source for TestingInput::Channel development.
-# REVERT to git dependency before pushing!
-dora-node-api = { path = "dora/apis/rust/node" }
+#
+# Pinned to commit 45436aad by mentor decision (2026-06-01 Weekly Sync,
+# Discussion #17).  Uses git dependency (not vendored path) — the crate
+# builds from a clean checkout with `cargo fetch` alone.
+#
+# NodeHarness uses TestingInput::Input (baked events) with deferred node
+# construction — no live Channel needed, no vendored patch required.
+# Upstream tracking for Channel API: dora-rs/dora#2855.
+dora-node-api = { git = "https://github.com/dora-rs/dora.git", rev = "45436aad124fe46463d0b0411e3922dae8ee9ebd" }
 
-# Arrow: DORA uses Arrow arrays for inter-node data.
-# Using 58 to match latest DORA main (which has upgraded from 53).
+# Arrow: must match the version used by the pinned DORA commit.
+# 45436aad uses arrow 58; do NOT bump unless the DORA pin changes.
 arrow = "58"
 arrow-json = "58"
+
+# Flume: used for the output channel (TestingOutput::ToChannel).
+# Upstream 45436aad uses flume::Sender for this; we keep it until
+# the upstream ToChannel→tokio-mpsc PR (mentor Week 7, Discussion #28)
+# is merged.
+flume = "0.10"
 
 # Tokio: async runtime used by DORA and our harness.
 tokio = { version = "1", features = ["sync", "macros", "rt"] }

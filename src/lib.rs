@@ -86,15 +86,15 @@
 //!
 //! | Component | Status |
 //! |-----------|--------|
-//! | [`NodeHarness`] (struct + `new()`) | Implemented — wraps [`DoraNode::init_testing()`][init] with live [`TestingInput::Channel`] + [`TestingOutput::ToChannel`] |
-//! | [`NodeHarness::send_input()`] | Implemented — pushes [`TimedIncomingEvent`] through live tokio mpsc channel |
+//! | [`NodeHarness`] (struct + `new()`) | Implemented — wraps [`DoraNode::init_testing()`][init] with deferred [`TestingInput::Input`] (baked events) + [`TestingOutput::ToChannel`] |
+//! | [`NodeHarness::send_input()`] | Implemented — buffers [`TimedIncomingEvent`] for deferred delivery |
 //! | [`NodeHarness::send_data()`] | Implemented — convenience: inject data by ID (accepts [`serde_json::Value`] and [`arrow::array::ArrayData`]) |
 //! | [`NodeHarness::send_stop()`] | Implemented — convenience wrapper around `send_input` for Stop events |
-//! | [`NodeHarness::send_output()`] | Implemented — delegates to [`DoraNode::send_output`]; safe after [`close_input`](NodeHarness::close_input) or [`run_to_completion`](NodeHarness::run_to_completion) |
-//! | [`NodeHarness::tick()`] | Implemented — synchronous, polls real [`EventStream`], collects outputs |
+//! | [`NodeHarness::send_output()`] | Implemented — triggers deferred init then delegates to [`DoraNode::send_output`] |
+//! | [`NodeHarness::tick()`] | Implemented — triggers deferred init, polls real [`EventStream`], collects outputs |
 //! | [`NodeHarness::recv_output()`] | Implemented — drains output buffers; returns `Option<Vec<Map<String, Value>>>` |
-//! | [`NodeHarness::close_input()`] | Implemented — drops input sender to unblock daemon thread for safe `send_output` |
-//! | [`NodeHarness::run_to_completion()`] | Implemented — loops tick() until Stop/None, auto-calls close_input(), returns Vec<Event> |
+//! | [`NodeHarness::close_input()`] | Implemented — no-op (kept for API compatibility; no live channel with deferred init) |
+//! | [`NodeHarness::run_to_completion()`] | Implemented — triggers deferred init, auto-injects Stop, loops tick() until terminal event, returns Vec<Event> |
 //! | E2E tests | Implemented — `tests/e2e.rs`: 5 tests covering input pipeline, output path, run_to_completion, full pipeline, Arrow data |
 //! | [`MockEventStream`] | Fully implemented + 3 tests |
 //! | [`MockOutputSender`] / [`OutputCollector`] | Fully implemented + 3 tests |
@@ -105,16 +105,18 @@
 //!
 //! ## Relationship to upstream DORA
 //!
-//! This crate extends the foundation in `dora-node-api`'s
-//! [`integration_testing`][dora-it] module ([`DoraNode::init_testing()`][init]).
-//! It adds the **runtime event injection** that `init_testing()` currently
-//! lacks — via a new [`TestingInput::Channel`] variant added upstream — and
-//! the output-capture + assertion helpers.
+//! This crate builds on `dora-node-api`'s [`integration_testing`][dora-it]
+//! module ([`DoraNode::init_testing()`][init]).
 //!
-//! The harness uses live [`tokio::sync::mpsc`] channels for both directions:
-//! input events flow from test code to the node through
-//! [`TestingInput::Channel`]; outputs flow back through
-//! [`TestingOutput::ToChannel`].  No file I/O or daemon connection required.
+//! **Inputs** use [`TestingInput::Input`] with deferred node construction:
+//! events are buffered in a `Vec` and delivered as a batch when the node
+//! is first driven (`tick` / `run_to_completion` / `send_output`).  This
+//! avoids the need for a live runtime channel and eliminates the
+//! daemon-thread deadlock (dora-rs/dora#2855).
+//!
+//! **Outputs** are captured through [`TestingOutput::ToChannel`] using
+//! `flume` (the upstream default; a tokio-mpsc migration is planned as
+//! a separate upstream PR — mentor Discussion #28).
 //!
 //! For pure-mock testing (no real node), the standalone mock types
 //! ([`MockEventStream`], [`MockOutputSender`]) use
