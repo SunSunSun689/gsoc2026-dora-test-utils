@@ -36,14 +36,26 @@ pub struct ReplayResult {
 
 | Method | Signature | |
 |--------|-----------|----|
+| `replay_sink` | `fn replay_sink(mut self, sink_id, output_file) -> Self` | Register a sink whose output should be captured and compared. Must match a sink in the baseline Recording. |
 | `dataflow` | `fn dataflow(mut self, path: impl Into<PathBuf>) -> Self` | Override YAML path from Recording |
 | `with_timeout` | `fn with_timeout(mut self, timeout: Duration) -> Self` | Override timeout from Recording |
+
+`replay_sink()` is required and symmetric with `RecordSession::record_sink()`.
+The sink IDs must match those in the baseline Recording. Sinks in the baseline
+that are NOT registered via `replay_sink()` are reported as `Missing` in the
+diff. Sinks registered but not in the baseline are reported as `Extra`.
 
 ### Execution
 
 | Method | Signature | |
 |--------|-----------|----|
-| `run` | `fn run(self) -> Result<ReplayResult, ReplayError>` | Rerun dataflow, collect outputs, compare |
+| `run` | `fn run(self) -> Result<ReplayResult, ReplayError>` | Run `dora run`, collect sink outputs, compare against baseline |
+
+`run()` internally:
+1. Resolves YAML path (override → baseline → error if missing)
+2. Runs `dora run <yaml> --stop-after <N>s`
+3. Reads each registered sink's output file
+4. Compares against baseline Recording
 
 ### Queries (on ReplayResult)
 
@@ -51,7 +63,7 @@ pub struct ReplayResult {
 |--------|---------|----|
 | `is_clean` | `bool` | true if all sinks match baseline |
 | `diff` | `&DiffReport` | Structured diff for programmatic inspection |
-| `assert_no_regression` | (panics) | `assert!`-style: panics with human-readable diff if regressions exist |
+| `assert_no_regression` | (panics) | Panics with human-readable diff if regressions exist |
 
 ## DiffReport
 
@@ -70,15 +82,26 @@ FieldDiff
   └── current: Value
 ```
 
-### Display output (example)
+### Display output
+
+`DiffReport` implements `Display`:
 
 ```
-Regression in 'test-sink': MISMATCH
-  data[2]: 3 -> 4
+No regressions detected. (2 sinks, all match)
 
-Regression in 'other-sink': MISSING
-  (present in baseline, absent in current)
+--- or ---
+
+Regressions detected (2/3 sinks affected):
+
+  [test-sink] MISMATCH (2 differences)
+    data[2]: 3 -> 4
+    count: 3 -> 4
+
+  [other-sink] MISSING
+    present in baseline but not in replay output
 ```
+
+`DiffReport` also implements `Serialize` for programmatic consumption.
 
 ## Comparison strategy (two-layer)
 
@@ -98,20 +121,24 @@ Regression in 'other-sink': MISSING
 
 ## Error type
 
-Extend `RecordError` to cover replay scenarios, or add variants specific to
-replay.  Tentative:
+Separate `ReplayError` from `RecordError` — the error variants differ:
 
-```
-RecordError::DataflowNotFound(path)
-RecordError::RunFailed { status, stderr }
-RecordError::SinkOutputMissing { sink_id, path }
-RecordError::SinkReadError { sink_id, error }
-RecordError::Io(io::Error)
-RecordError::Json(serde_json::Error)
+```rust
+pub enum ReplayError {
+    LoadFailed(RecordError),                          // Recording::load failed
+    DataflowNotFound(PathBuf),                        // YAML not found
+    DoraNotFound(String),                             // dora CLI not found
+    RunFailed { status: String, stderr: String },     // dora run failed
+    NoSinksConfigured,                                // no replay_sink() calls
+    SinkNotInBaseline(String),                        // replay_sink() for unknown sink
+    SinkOutputMissing { sink_id: String, path: PathBuf },
+    SinkReadError { sink_id: String, error: String },
+    Io(std::io::Error),
+    Json(serde_json::Error),
+}
 ```
 
-`NoSinksConfigured` is not applicable to ReplaySession (baseline always has
-sinks).  `DoraNotFound` is reused from RecordSession.
+Implements `Display`, `Error`, `From<io::Error>`, `From<serde_json::Error>`.
 
 ## File layout
 
