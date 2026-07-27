@@ -22,9 +22,9 @@ fn dora_available() -> bool {
 
 fn find_dora_binary() -> PathBuf {
     for profile in &["debug", "release"] {
-        let vendored = Path::new("dora/target").join(profile).join("dora");
-        if vendored.exists() {
-            return vendored;
+        let local = Path::new("dora/target").join(profile).join("dora");
+        if local.exists() {
+            return local;
         }
     }
     PathBuf::from("dora")

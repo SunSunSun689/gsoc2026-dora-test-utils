@@ -122,6 +122,18 @@
 //! ([`MockEventStream`], [`MockOutputSender`]) use
 //! [`tokio::sync::mpsc`] channels.
 //!
+//! ## API Stability
+//!
+//! | Component | Stability | Notes |
+//! |-----------|-----------|-------|
+//! | [`NodeHarness`] | **Stable** | Core unit-test driver; signatures will not change without deprecation |
+//! | [`MockEventStream`] | **Stable** | Pure-mock event stream for lightweight tests |
+//! | [`MockOutputSender`] / [`OutputCollector`] | **Stable** | Pure-mock output capture |
+//! | [`IntoInputData`] | **Stable** | Trait for `send_data()` input conversion |
+//! | `source::run_test_source` | **Stable** | TestSource CLI + library |
+//! | `sink::run_test_sink` | **Stable** | TestSink CLI + library |
+//! | [`RecordSession`] / [`Recording`] | **Experimental** | Record/replay is in active development (Week 9–10); API may evolve |
+//!
 //! [init]: https://docs.rs/dora-node-api/latest/dora_node_api/struct.DoraNode.html#method.init_testing
 //! [dora-it]: https://docs.rs/dora-node-api/latest/dora_node_api/integration_testing/
 

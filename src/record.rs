@@ -280,11 +280,11 @@ impl Recording {
 
 /// Locate the dora CLI binary.
 fn find_dora_binary() -> PathBuf {
-    // Check vendored dora workspace build first (debug, then release).
+    // Check local dora workspace build first (debug, then release).
     for profile in &["debug", "release"] {
-        let vendored = Path::new("dora/target").join(profile).join("dora");
-        if vendored.exists() {
-            return vendored;
+        let local = Path::new("dora/target").join(profile).join("dora");
+        if local.exists() {
+            return local;
         }
     }
     // Fall back to PATH.

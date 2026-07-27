@@ -76,12 +76,12 @@ fn bin_dir() -> PathBuf {
 
 /// Find the dora CLI binary.
 fn dora_binary() -> PathBuf {
-    // Check the vendored dora workspace build first — try both
+    // Check the local dora workspace build first — try both
     // debug and release profiles (debug is more common in dev).
     for profile in &["debug", "release"] {
-        let vendored = Path::new("dora/target").join(profile).join("dora");
-        if vendored.exists() {
-            return vendored;
+        let local = Path::new("dora/target").join(profile).join("dora");
+        if local.exists() {
+            return local;
         }
     }
     // Fall back to PATH.
