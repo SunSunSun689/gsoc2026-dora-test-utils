@@ -231,6 +231,60 @@ impl std::fmt::Display for DiffReport {
     }
 }
 
+/// A replay session for regression testing a DORA dataflow.
+///
+/// Created via [`ReplaySession::load`], configured with sinks and optional
+/// overrides, then executed via [`run`](ReplaySession::run).
+#[derive(Debug)]
+pub struct ReplaySession {
+    recording: Recording,
+    sinks: Vec<(String, PathBuf)>,
+    dataflow_override: Option<PathBuf>,
+    timeout_override: Option<Duration>,
+}
+
+impl ReplaySession {
+    /// Load a previously saved Recording and prepare for replay.
+    ///
+    /// Call [`replay_sink`](Self::replay_sink) for each sink whose output
+    /// should be captured and compared, then [`run`](Self::run).
+    pub fn load(path: impl AsRef<Path>) -> Result<Self, ReplayError> {
+        let recording = Recording::load(path).map_err(ReplayError::from)?;
+        Ok(Self {
+            recording,
+            sinks: Vec::new(),
+            dataflow_override: None,
+            timeout_override: None,
+        })
+    }
+
+    /// Register a sink whose output should be captured and compared.
+    ///
+    /// `sink_id` must match a sink in the baseline Recording.
+    /// `output_file` is where the TestSink writes its output (passed via
+    /// `--output-file` CLI arg in the YAML).
+    pub fn replay_sink(
+        mut self,
+        sink_id: impl Into<String>,
+        output_file: impl Into<PathBuf>,
+    ) -> Self {
+        self.sinks.push((sink_id.into(), output_file.into()));
+        self
+    }
+
+    /// Override the dataflow YAML path from the Recording.
+    pub fn dataflow(mut self, path: impl Into<PathBuf>) -> Self {
+        self.dataflow_override = Some(path.into());
+        self
+    }
+
+    /// Override the timeout from the Recording.
+    pub fn with_timeout(mut self, timeout: Duration) -> Self {
+        self.timeout_override = Some(timeout);
+        self
+    }
+}
+
 /// A recording session for a DORA dataflow.
 ///
 /// Created via [`RecordSession::attach`], configured with sinks and timeout,
