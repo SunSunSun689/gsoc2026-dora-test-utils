@@ -231,6 +231,14 @@ impl std::fmt::Display for DiffReport {
     }
 }
 
+/// Result of a replay run: baseline sinks, current sinks, and comparison report.
+#[derive(Debug, Clone, Serialize)]
+pub struct ReplayResult {
+    pub baseline_sinks: HashMap<String, serde_json::Value>,
+    pub current_sinks: HashMap<String, serde_json::Value>,
+    pub report: DiffReport,
+}
+
 /// A replay session for regression testing a DORA dataflow.
 ///
 /// Created via [`ReplaySession::load`], configured with sinks and optional
@@ -282,6 +290,102 @@ impl ReplaySession {
     pub fn with_timeout(mut self, timeout: Duration) -> Self {
         self.timeout_override = Some(timeout);
         self
+    }
+
+    /// Execute the replay and compare against the baseline.
+    ///
+    /// Runs `dora run <yaml> --stop-after <N>s`, collects sink outputs,
+    /// then compares each against the baseline Recording.
+    pub fn run(self) -> Result<ReplayResult, ReplayError> {
+        if self.sinks.is_empty() {
+            return Err(ReplayError::NoSinksConfigured);
+        }
+
+        // Validate that all registered sinks exist in the baseline.
+        for (sink_id, _) in &self.sinks {
+            if !self.recording.sinks.contains_key(sink_id) {
+                return Err(ReplayError::SinkNotInBaseline(sink_id.clone()));
+            }
+        }
+
+        // Resolve YAML path.
+        let yaml_path = if let Some(ref p) = self.dataflow_override {
+            p.clone()
+        } else {
+            PathBuf::from(&self.recording.metadata.dataflow_yaml)
+        };
+        if !yaml_path.exists() {
+            return Err(ReplayError::DataflowNotFound(yaml_path));
+        }
+
+        // Resolve timeout.
+        let timeout = self
+            .timeout_override
+            .unwrap_or(Duration::from_secs_f64(self.recording.metadata.timeout_secs.max(0.1)));
+
+        // Locate dora binary.
+        let dora = find_dora_binary();
+
+        // Run dora run.
+        let timeout_secs = timeout.as_secs_f64().max(0.1);
+        let stop_after = format!("{}s", timeout_secs);
+        let yaml_str = yaml_path.to_str().ok_or_else(|| {
+            ReplayError::Io(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                format!("YAML path is not valid UTF-8: {}", yaml_path.display()),
+            ))
+        })?;
+
+        let output = Command::new(&dora)
+            .args(["run", yaml_str, "--stop-after", &stop_after])
+            .output()
+            .map_err(|e| {
+                if e.kind() == std::io::ErrorKind::NotFound {
+                    ReplayError::DoraNotFound(dora.display().to_string())
+                } else {
+                    ReplayError::Io(e)
+                }
+            })?;
+
+        if !output.status.success() {
+            return Err(ReplayError::RunFailed {
+                status: output.status.to_string(),
+                stderr: String::from_utf8_lossy(&output.stderr).to_string(),
+            });
+        }
+
+        // Collect current sink outputs.
+        let mut current_sinks = HashMap::new();
+        for (sink_id, output_file) in &self.sinks {
+            if !output_file.exists() {
+                return Err(ReplayError::SinkOutputMissing {
+                    sink_id: sink_id.clone(),
+                    path: output_file.clone(),
+                });
+            }
+            let contents = std::fs::read_to_string(output_file).map_err(|e| {
+                ReplayError::SinkReadError {
+                    sink_id: sink_id.clone(),
+                    error: e.to_string(),
+                }
+            })?;
+            let value: serde_json::Value = serde_json::from_str(&contents).map_err(|e| {
+                ReplayError::SinkReadError {
+                    sink_id: sink_id.clone(),
+                    error: format!("invalid JSON: {e}"),
+                }
+            })?;
+            current_sinks.insert(sink_id.clone(), value);
+        }
+
+        // Compare.
+        let report = compare_recordings(&self.recording.sinks, &current_sinks);
+
+        Ok(ReplayResult {
+            baseline_sinks: self.recording.sinks.clone(),
+            current_sinks,
+            report,
+        })
     }
 }
 
@@ -508,4 +612,238 @@ fn get_dora_version(dora_binary: &Path) -> Result<String, RecordError> {
     } else {
         Ok("unknown".to_string())
     }
+}
+
+// ── Replay comparison helpers ─────────────────────────────────────────
+
+/// Compare baseline sink outputs against current (replay) outputs.
+///
+/// Layer 1: fast JSON structural comparison.
+/// Layer 2: for `data` arrays that differ in layer 1, attempt Arrow semantic
+///          comparison (tolerates Int32→Int64 etc.).
+fn compare_recordings(
+    baseline: &HashMap<String, serde_json::Value>,
+    current: &HashMap<String, serde_json::Value>,
+) -> DiffReport {
+    let mut regressions = Vec::new();
+
+    // Check baseline sinks present in current.
+    for (sink_id, baseline_value) in baseline {
+        match current.get(sink_id) {
+            Some(current_value) => {
+                let differences =
+                    compare_sink_outputs(sink_id, baseline_value, current_value);
+                regressions.push(SinkDiff {
+                    sink_id: sink_id.clone(),
+                    status: if differences.is_empty() {
+                        DiffStatus::Match
+                    } else {
+                        DiffStatus::Mismatch
+                    },
+                    differences,
+                });
+            }
+            None => {
+                regressions.push(SinkDiff {
+                    sink_id: sink_id.clone(),
+                    status: DiffStatus::Missing,
+                    differences: Vec::new(),
+                });
+            }
+        }
+    }
+
+    // Check for extra sinks in current not in baseline.
+    for sink_id in current.keys() {
+        if !baseline.contains_key(sink_id) {
+            regressions.push(SinkDiff {
+                sink_id: sink_id.clone(),
+                status: DiffStatus::Extra,
+                differences: Vec::new(),
+            });
+        }
+    }
+
+    DiffReport { regressions }
+}
+
+/// Compare two sink outputs. Returns empty Vec if they match.
+fn compare_sink_outputs(
+    _sink_id: &str,
+    baseline: &serde_json::Value,
+    current: &serde_json::Value,
+) -> Vec<FieldDiff> {
+    let mut diffs = Vec::new();
+    json_diff("", baseline, current, &mut diffs);
+
+    // If JSON diff found differences in a "data" array, try semantic
+    // comparison as a second pass.
+    let has_data_diff = diffs.iter().any(|d| d.path.starts_with("data"));
+    if has_data_diff {
+        if let (Some(baseline_data), Some(current_data)) =
+            (baseline.get("data"), current.get("data"))
+        {
+            diffs.retain(|d| !d.path.starts_with("data"));
+            let semantic_diffs = compare_data_semantic(baseline_data, current_data);
+            diffs.extend(semantic_diffs);
+        }
+    }
+
+    diffs
+}
+
+/// Recursive JSON field-by-field comparison.
+fn json_diff(
+    prefix: &str,
+    baseline: &serde_json::Value,
+    current: &serde_json::Value,
+    diffs: &mut Vec<FieldDiff>,
+) {
+    let path = |suffix: &str| {
+        if prefix.is_empty() {
+            suffix.to_string()
+        } else {
+            format!("{prefix}{suffix}")
+        }
+    };
+
+    match (baseline, current) {
+        (serde_json::Value::Object(b), serde_json::Value::Object(c)) => {
+            let mut keys: Vec<&String> = b.keys().chain(c.keys()).collect();
+            keys.sort();
+            keys.dedup();
+            for key in keys {
+                match (b.get(key), c.get(key)) {
+                    (Some(bv), Some(cv)) => json_diff(&path(&format!(".{key}")), bv, cv, diffs),
+                    (Some(_), None) => diffs.push(FieldDiff {
+                        path: path(&format!(".{key}")),
+                        baseline: serde_json::Value::String("<present>".into()),
+                        current: serde_json::Value::String("<missing>".into()),
+                    }),
+                    (None, Some(_)) => diffs.push(FieldDiff {
+                        path: path(&format!(".{key}")),
+                        baseline: serde_json::Value::String("<missing>".into()),
+                        current: serde_json::Value::String("<present>".into()),
+                    }),
+                    (None, None) => {}
+                }
+            }
+        }
+        (serde_json::Value::Array(b), serde_json::Value::Array(c)) => {
+            let len = b.len().max(c.len());
+            for i in 0..len {
+                match (b.get(i), c.get(i)) {
+                    (Some(bv), Some(cv)) => json_diff(&path(&format!("[{i}]")), bv, cv, diffs),
+                    (Some(_), None) => diffs.push(FieldDiff {
+                        path: path(&format!("[{i}]")),
+                        baseline: serde_json::Value::String("<present>".into()),
+                        current: serde_json::Value::String("<missing>".into()),
+                    }),
+                    (None, Some(_)) => diffs.push(FieldDiff {
+                        path: path(&format!("[{i}]")),
+                        baseline: serde_json::Value::String("<missing>".into()),
+                        current: serde_json::Value::String("<present>".into()),
+                    }),
+                    (None, None) => {}
+                }
+            }
+        }
+        _ => {
+            if baseline != current {
+                diffs.push(FieldDiff {
+                    path: path(""),
+                    baseline: baseline.clone(),
+                    current: current.clone(),
+                });
+            }
+        }
+    }
+}
+
+/// Semantic comparison for `data` arrays — tolerates arrow type differences.
+fn compare_data_semantic(
+    baseline: &serde_json::Value,
+    current: &serde_json::Value,
+) -> Vec<FieldDiff> {
+    use crate::sink;
+
+    // Extract baseline elements as &serde_json::Value references.
+    let baseline_arr = match baseline.as_array() {
+        Some(arr) => arr,
+        None => {
+            // Can't parse as array — keep JSON-level diffs.
+            let mut diffs = Vec::new();
+            json_diff("data", baseline, current, &mut diffs);
+            return diffs;
+        }
+    };
+    let baseline_refs: Vec<&serde_json::Value> = baseline_arr.iter().collect();
+
+    // Convert current to Arrow arrays.
+    let c_arrays = match json_to_arrow_arrays(current) {
+        Ok(a) => a,
+        Err(_) => {
+            // Can't parse as Arrow — keep JSON-level diffs.
+            let mut diffs = Vec::new();
+            json_diff("data", baseline, current, &mut diffs);
+            return diffs;
+        }
+    };
+
+    let b_len = baseline_refs.len();
+    let c_len = c_arrays.len();
+
+    if b_len != c_len {
+        return vec![FieldDiff {
+            path: "data.length".into(),
+            baseline: serde_json::json!(b_len),
+            current: serde_json::json!(c_len),
+        }];
+    }
+
+    let mut diffs = Vec::new();
+    for i in 0..b_len {
+        let result = sink::compare_semantic(
+            &[baseline_refs[i]],
+            &c_arrays[i..i + 1],
+            None,
+        );
+        if !result.r#match {
+            for d in &result.differences {
+                diffs.push(FieldDiff {
+                    path: format!("data[{i}]"),
+                    baseline: serde_json::json!(d.message),
+                    current: serde_json::json!(""),
+                });
+            }
+        }
+    }
+    diffs
+}
+
+/// Convert a JSON `data` array value to Arrow ArrayRefs.
+fn json_to_arrow_arrays(value: &serde_json::Value) -> Result<Vec<arrow::array::ArrayRef>, String> {
+    use std::sync::Arc;
+
+    let arrays = match value.as_array() {
+        Some(arr) => arr,
+        None => return Err("data is not an array".into()),
+    };
+    if arrays.is_empty() {
+        return Ok(vec![]);
+    }
+
+    let mut result = Vec::new();
+    for elem in arrays {
+        let data_val = elem.get("data").unwrap_or(elem);
+        let arr: arrow::array::Int64Array = match data_val {
+            serde_json::Value::Number(n) => {
+                let v = n.as_i64().unwrap_or(0);
+                arrow::array::Int64Array::from(vec![v])
+            }
+            _ => arrow::array::Int64Array::from(vec![0]),
+        };
+        result.push(Arc::new(arr) as arrow::array::ArrayRef);
+    }
+    Ok(result)
 }

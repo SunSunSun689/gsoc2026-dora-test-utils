@@ -148,5 +148,5 @@ pub mod traits;
 pub use harness::NodeHarness;
 pub use mock::event_stream::MockEventStream;
 pub use mock::output::{MockOutputSender, OutputCollector};
-pub use record::{RecordSession, Recording};
+pub use record::{ReplayResult, ReplaySession, Recording, RecordSession};
 pub use traits::IntoInputData;
