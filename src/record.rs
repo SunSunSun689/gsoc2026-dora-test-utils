@@ -247,6 +247,22 @@ impl ReplayResult {
         self.report.regressions.is_empty()
             || self.report.regressions.iter().all(|r| r.status == DiffStatus::Match)
     }
+
+    /// Returns a reference to the diff report.
+    pub fn diff(&self) -> &DiffReport {
+        &self.report
+    }
+
+    /// Panics if any regressions are detected.
+    ///
+    /// # Panics
+    ///
+    /// Panics with a formatted regression report when regressions exist.
+    pub fn assert_no_regression(&self) {
+        if !self.is_clean() {
+            panic!("Regression detected:\n{}", self.report);
+        }
+    }
 }
 
 /// A replay session for regression testing a DORA dataflow.
