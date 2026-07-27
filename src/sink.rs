@@ -272,7 +272,7 @@ fn compare_strict(
 /// Respects `expected_data_type` from the expected file so that
 /// e.g. `Int32` expected values are converted to `Int32Array` rather
 /// than the default `Int64Array`.
-fn compare_semantic(
+pub fn compare_semantic(
     expected: &[&serde_json::Value],
     received: &[arrow::array::ArrayRef],
     expected_data_type: Option<&arrow::datatypes::DataType>,
