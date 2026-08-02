@@ -390,20 +390,19 @@ fn write_record_output(
 
     // Serialize each received Arrow array to JSON values.
     let mut all_rows: Vec<serde_json::Value> = Vec::new();
-    let mut data_type: Option<String> = None;
+    let mut data_type_json: Option<serde_json::Value> = None;
 
     for array in received {
-        if data_type.is_none() {
-            // Serialize via serde so that the output is parseable by
-            // serde_json::from_value::<DataType> (used in run_test_sink).
-            // `format!("{:?}")` produces Debug output which diverges from
-            // serde for complex types like Struct, List, Timestamp, Decimal.
-            data_type = serde_json::to_value(array.data_type())
-                .ok()
-                .map(|v| match v {
-                    serde_json::Value::String(s) => s,
-                    other => other.to_string(),
-                });
+        if data_type_json.is_none() {
+            // Serialize via serde so the output is parseable by
+            // serde_json::from_value::<DataType> in run_test_sink.
+            // Store the raw serde_json::Value — simple types become JSON
+            // strings ("Int32"), complex types become JSON objects
+            // ({"Timestamp": ["Microsecond", null]}).  Both round-trip
+            // through serde_json::from_value correctly.
+            // The old format!("{:?}") approach produced Debug strings
+            // that were unparseable for Struct/List/Timestamp/Decimal.
+            data_type_json = serde_json::to_value(array.data_type()).ok();
         }
 
         let schema = Schema::new(vec![Field::new("data", array.data_type().clone(), true)]);
@@ -430,7 +429,7 @@ fn write_record_output(
 
     let record_json = serde_json::json!({
         "data": all_rows,
-        "data_type": data_type.unwrap_or_else(|| "Unknown".to_string()),
+        "data_type": data_type_json.unwrap_or(serde_json::Value::String("Unknown".to_string())),
         "count": all_rows.len(),
     });
 

@@ -79,8 +79,10 @@ DEMO="target/debug/examples/demo_replay"
 if [ -f "$DEMO" ]; then
     step "Running Record/Replay demo..."
     echo ""
+    set +e
     "$DEMO" 2>&1
     DEMO_EXIT=$?
+    set -e
     echo ""
     if [ $DEMO_EXIT -ne 0 ]; then
         warn "demo_replay exited with code $DEMO_EXIT"
@@ -92,31 +94,31 @@ else
 fi
 
 # ─── 3. Library unit tests ───────────────────────────────
-banner "3. Library unit tests (52)"
+banner "3. Library unit tests (80)"
 
 step "Running cargo test --lib..."
-cargo test --lib -- --nocapture 2>&1 | grep -E "(test result|FAILED)" || true
+cargo test --lib
 
 # ─── 4. E2E tests ────────────────────────────────────────
 banner "4. E2E tests (5)"
 
 step "Running cargo test --test e2e..."
-cargo test --test e2e -- --test-threads=1 2>&1 | grep -E "(test result|FAILED)" || true
+cargo test --test e2e -- --test-threads=1
 
 # ─── 5. Record/Replay E2E tests ──────────────────────────
 banner "5. Record/Replay e2e tests (15)"
 
 step "Running e2e_record tests (4)..."
-timeout 120 cargo test --test e2e_record -- --test-threads=1 2>&1 | grep -E "(test result|FAILED)" || true
+timeout 120 cargo test --test e2e_record -- --test-threads=1
 
 step "Running e2e_replay tests (11)..."
-timeout 120 cargo test --test e2e_replay -- --test-threads=1 2>&1 | grep -E "(test result|FAILED)" || true
+timeout 120 cargo test --test e2e_replay -- --test-threads=1
 
 # ─── 6. Smoke tests ──────────────────────────────────────
 banner "6. Smoke tests (3)"
 
 step "Running cargo test --test smoke..."
-cargo test --test smoke -- --test-threads=1 2>&1 | grep -E "(test result|FAILED)" || true
+cargo test --test smoke -- --test-threads=1
 
 # ─── Done ────────────────────────────────────────────────
 banner "Demo Complete"

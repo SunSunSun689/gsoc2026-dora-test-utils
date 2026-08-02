@@ -158,6 +158,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     if !result.is_clean() {
         println!("  ✅ Regression correctly detected!");
+    } else {
+        eprintln!(
+            "  ❌ FAIL: Regression NOT detected — mutated data should have caused a Mismatch!"
+        );
+        std::process::exit(1);
     }
 
     println!("\n══════════════════════════════════════════════");

@@ -336,8 +336,16 @@ impl NodeHarness {
     fn ensure_init(&mut self) {
         if self.node.is_some() {
             // Node already initialized — buffered events can never reach it.
-            // Clear to avoid silently accumulating dead events that mislead
-            // callers into thinking they were delivered.
+            if !self.pending_events.is_empty() {
+                // Warn: these events will never be delivered.  The node was
+                // already created and its TestingInput consumed atomically.
+                eprintln!(
+                    "NodeHarness: {} buffered event(s) dropped — node already \
+                     initialized.  Call send_data/send_stop BEFORE the first \
+                     tick/run_to_completion/send_output.",
+                    self.pending_events.len()
+                );
+            }
             self.pending_events.clear();
             return;
         }
