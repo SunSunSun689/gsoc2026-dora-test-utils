@@ -154,5 +154,4 @@ PR 尚未正式提交（代码已就绪），等待 mentor 确认时机。
 ## 7. 待讨论问题
 
 1. **Upstream PR (a) 时机**：代码已就绪，现在提交还是等 Week 13 final submission 后？
-2. **DORA version bump**：当前 pin 在 `45436aad`（6月初确认），是否需要升级？
-3. **Weekly Sync Discussions**：Week 8/9/10/12 的讨论帖尚未发布，本周补上
+2. **Weekly Sync Discussions**：Week 8/9/10/12 的讨论帖尚未发布，本周补上
