@@ -427,4 +427,49 @@ mod tests {
             other => panic!("expected Input event, got {other:?}"),
         }
     }
+
+    #[test]
+    fn test_post_init_send_data_cleared() {
+        // After tick() initializes the node, any new send_data() calls
+        // buffer events that can never be delivered (TestingInput consumed).
+        // ensure_init clears them — verify this doesn't panic or loop.
+        let mut harness = NodeHarness::new().expect("harness should be created");
+        harness.send_data("first", serde_json::json!([1]));
+        harness.tick(); // node init happens here
+                        // This event goes to pending_events but will be cleared on next ensure_init
+        harness.send_data("second", serde_json::json!([2]));
+        harness.tick(); // should clear pending_events, not panic
+                        // Stream is exhausted — tick returns None
+        let event = harness.tick();
+        assert!(event.is_none(), "stream should be exhausted");
+    }
+
+    #[test]
+    #[should_panic(expected = "invalid input_id")]
+    fn test_send_data_invalid_input_id() {
+        let mut harness = NodeHarness::new().expect("harness should be created");
+        harness.send_data("not a valid id!!!", serde_json::json!([1]));
+    }
+
+    #[test]
+    fn test_recv_output_nonexistent() {
+        let mut harness = NodeHarness::new().expect("harness should be created");
+        harness.send_stop();
+        harness.run_to_completion();
+        let result = harness.recv_output("nonexistent");
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_send_output_invalid_id() {
+        let mut harness = NodeHarness::new().expect("harness should be created");
+        harness.send_stop();
+        harness.run_to_completion();
+        let result = harness.send_output("bad id !!!", arrow::array::Int32Array::from(vec![1]));
+        assert!(result.is_err());
+        assert!(
+            format!("{}", result.unwrap_err()).contains("invalid output_id"),
+            "error should mention invalid output_id"
+        );
+    }
 }

@@ -65,3 +65,7 @@ path = "src/bin/test-sink.rs"
 [[bin]]
 name = "test-source"
 path = "src/bin/test_source.rs"
+
+[[example]]
+name = "demo_replay"
+path = "examples/demo_replay.rs"

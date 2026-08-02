@@ -1090,4 +1090,224 @@ mod tests {
         assert!(display.contains("MISMATCH"));
         assert!(display.contains("count"));
     }
+
+    // ── compare_recordings direct tests ──────────────────────────
+
+    #[test]
+    fn test_compare_recordings_match() {
+        let mut baseline = HashMap::new();
+        baseline.insert("s1".into(), serde_json::json!({"data": [1, 2], "count": 2}));
+        let mut current = HashMap::new();
+        current.insert("s1".into(), serde_json::json!({"data": [1, 2], "count": 2}));
+        let report = compare_recordings(&baseline, &current);
+        assert_eq!(report.regressions.len(), 1);
+        assert_eq!(report.regressions[0].status, DiffStatus::Match);
+    }
+
+    #[test]
+    fn test_compare_recordings_missing() {
+        let mut baseline = HashMap::new();
+        baseline.insert("s1".into(), serde_json::json!({"data": [1]}));
+        baseline.insert("s2".into(), serde_json::json!({"data": [2]}));
+        let current = HashMap::new(); // both missing
+        let report = compare_recordings(&baseline, &current);
+        assert_eq!(report.regressions.len(), 2);
+        assert!(report
+            .regressions
+            .iter()
+            .all(|r| r.status == DiffStatus::Missing));
+    }
+
+    #[test]
+    fn test_compare_recordings_extra() {
+        let baseline = HashMap::new();
+        let mut current = HashMap::new();
+        current.insert("s1".into(), serde_json::json!({"data": [1]}));
+        let report = compare_recordings(&baseline, &current);
+        assert_eq!(report.regressions.len(), 1);
+        assert_eq!(report.regressions[0].status, DiffStatus::Extra);
+    }
+
+    #[test]
+    fn test_compare_recordings_mixed() {
+        let mut baseline = HashMap::new();
+        baseline.insert("match-sink".into(), serde_json::json!({"data": [1]}));
+        baseline.insert("missing-sink".into(), serde_json::json!({"data": [2]}));
+        let mut current = HashMap::new();
+        current.insert("match-sink".into(), serde_json::json!({"data": [1]}));
+        current.insert("mismatch-sink".into(), serde_json::json!({"data": [99]}));
+        current.insert("extra-sink".into(), serde_json::json!({"data": [3]}));
+        let report = compare_recordings(&baseline, &current);
+
+        let statuses: Vec<_> = report
+            .regressions
+            .iter()
+            .map(|r| (r.sink_id.as_str(), &r.status))
+            .collect();
+        // match-sink: present in both, identical → Match
+        assert!(statuses.contains(&("match-sink", &DiffStatus::Match)));
+        // missing-sink: in baseline but NOT in current → Missing
+        assert!(statuses.contains(&("missing-sink", &DiffStatus::Missing)));
+        // mismatch-sink: in current but NOT in baseline → Extra
+        assert!(statuses.contains(&("mismatch-sink", &DiffStatus::Extra)));
+        // extra-sink: in current but NOT in baseline → Extra
+        assert!(statuses.contains(&("extra-sink", &DiffStatus::Extra)));
+    }
+
+    // ── compare_sink_outputs: .data prefix fix ──────────────────
+
+    #[test]
+    fn test_data_type_diff_preserved() {
+        // .data identical but .data_type differs — should NOT be stripped
+        // by the .data prefix retain (fix #1).
+        let baseline = serde_json::json!({"data": [1, 2, 3], "data_type": "Int32", "count": 3});
+        let current = serde_json::json!({"data": [1, 2, 3], "data_type": "Int64", "count": 3});
+        let diffs = compare_sink_outputs("test", &baseline, &current);
+        // .data_type differs and starts_with(".data") was the bug — should
+        // now be preserved as a FieldDiff.
+        assert!(
+            diffs.iter().any(|d| d.path.contains("data_type")),
+            "data_type diff should be preserved, got diffs: {diffs:?}"
+        );
+    }
+
+    #[test]
+    fn test_data_key_diff_still_detected() {
+        // .data itself differs — should trigger semantic comparison.
+        let baseline = serde_json::json!({"data": [1, 2, 3], "count": 3});
+        let current = serde_json::json!({"data": [1, 2, 99], "count": 3});
+        let diffs = compare_sink_outputs("test", &baseline, &current);
+        assert!(!diffs.is_empty(), "data difference should be detected");
+    }
+
+    // ── json_diff edge cases ────────────────────────────────────
+
+    #[test]
+    fn test_json_diff_nested_objects() {
+        let baseline = serde_json::json!({"meta": {"version": 1, "tags": ["a", "b"]}});
+        let current = serde_json::json!({"meta": {"version": 2, "tags": ["a", "c"]}});
+        let mut diffs = Vec::new();
+        json_diff("", &baseline, &current, &mut diffs);
+        // Two differences: .meta.version and .meta.tags[1]
+        assert_eq!(diffs.len(), 2);
+        assert!(
+            diffs.iter().any(|d| d.path == ".meta.version"),
+            "should detect .meta.version diff"
+        );
+        assert!(
+            diffs.iter().any(|d| d.path == ".meta.tags[1]"),
+            "should detect .meta.tags[1] diff"
+        );
+    }
+
+    #[test]
+    fn test_json_diff_null_values() {
+        let baseline = serde_json::json!({"key": null, "other": 42});
+        let current = serde_json::json!({"key": "not-null", "other": 42});
+        let mut diffs = Vec::new();
+        json_diff("", &baseline, &current, &mut diffs);
+        assert_eq!(diffs.len(), 1);
+        assert_eq!(diffs[0].path, ".key");
+    }
+
+    #[test]
+    fn test_json_diff_extra_key_in_current() {
+        let baseline = serde_json::json!({"a": 1});
+        let current = serde_json::json!({"a": 1, "b": 2});
+        let mut diffs = Vec::new();
+        json_diff("", &baseline, &current, &mut diffs);
+        assert_eq!(diffs.len(), 1);
+        assert_eq!(diffs[0].path, ".b");
+    }
+
+    #[test]
+    fn test_json_diff_missing_key_in_current() {
+        let baseline = serde_json::json!({"a": 1, "b": 2});
+        let current = serde_json::json!({"a": 1});
+        let mut diffs = Vec::new();
+        json_diff("", &baseline, &current, &mut diffs);
+        assert_eq!(diffs.len(), 1);
+        assert_eq!(diffs[0].path, ".b");
+    }
+
+    // ── compare_data_semantic edge cases ─────────────────────────
+
+    #[test]
+    fn test_compare_data_semantic_length_mismatch() {
+        let baseline = serde_json::json!([1, 2, 3]);
+        let current = serde_json::json!([1, 2]);
+        let diffs = compare_data_semantic(&baseline, &current);
+        assert_eq!(diffs.len(), 1);
+        assert_eq!(diffs[0].path, "data.length");
+    }
+
+    #[test]
+    fn test_compare_data_semantic_empty_arrays() {
+        let baseline = serde_json::json!([]);
+        let current = serde_json::json!([]);
+        let diffs = compare_data_semantic(&baseline, &current);
+        assert!(diffs.is_empty());
+    }
+
+    #[test]
+    fn test_compare_data_semantic_string_fallback() {
+        // String elements in 'data' arrays use json_diff fallback
+        // (json_to_arrow_arrays only handles numbers).
+        let baseline = serde_json::json!(["hello", "world"]);
+        let current = serde_json::json!(["hello", "different"]);
+        let diffs = compare_data_semantic(&baseline, &current);
+        assert!(!diffs.is_empty());
+    }
+
+    // ── DiffReport edge cases ───────────────────────────────────
+
+    #[test]
+    fn test_diff_report_display_mixed_statuses() {
+        let report = DiffReport {
+            regressions: vec![
+                SinkDiff {
+                    sink_id: "match".into(),
+                    status: DiffStatus::Match,
+                    differences: vec![],
+                },
+                SinkDiff {
+                    sink_id: "missing".into(),
+                    status: DiffStatus::Missing,
+                    differences: vec![],
+                },
+                SinkDiff {
+                    sink_id: "extra".into(),
+                    status: DiffStatus::Extra,
+                    differences: vec![],
+                },
+            ],
+        };
+        let display = report.to_string();
+        assert!(display.contains("Regressions detected"));
+        assert!(display.contains("MISSING"));
+        assert!(display.contains("EXTRA"));
+        // "match" sink should NOT appear in the "bad" section
+        assert!(!display.contains("[match]"));
+    }
+
+    #[test]
+    fn test_diff_report_display_all_match_no_counts() {
+        let report = DiffReport {
+            regressions: vec![
+                SinkDiff {
+                    sink_id: "s1".into(),
+                    status: DiffStatus::Match,
+                    differences: vec![],
+                },
+                SinkDiff {
+                    sink_id: "s2".into(),
+                    status: DiffStatus::Match,
+                    differences: vec![],
+                },
+            ],
+        };
+        let display = report.to_string();
+        assert!(display.contains("No regressions"));
+        assert!(display.contains("2 sinks"));
+    }
 }

@@ -712,4 +712,68 @@ mod tests {
         assert_eq!(parsed["data"].as_array().unwrap().len(), 3);
         // Values should be 10, 20, 30 (may be nested under "data" key).
     }
+
+    // ── Conversion error + cast failure edge cases ──────────────
+
+    #[test]
+    fn test_compare_semantic_null_value_conversion_error() {
+        // serde_json::Value::Null cannot be converted to Arrow — should
+        // produce a conversion-error Difference, not a panic.
+        let null_val = serde_json::Value::Null;
+        let expected: Vec<&serde_json::Value> = vec![&null_val];
+        let received: Vec<arrow::array::ArrayRef> =
+            vec![Arc::new(arrow::array::Int64Array::from(vec![42]))];
+        let result = compare_semantic(&expected, &received, None);
+        assert!(
+            !result.r#match,
+            "Null vs Int64 should not match, got {result:#?}"
+        );
+        assert!(!result.differences.is_empty());
+        // Should contain a conversion-error Difference mentioning "null"
+        assert!(
+            result
+                .differences
+                .iter()
+                .any(|d| d.message.to_lowercase().contains("null")),
+            "should mention null in differences, got {result:#?}"
+        );
+    }
+
+    #[test]
+    fn test_compare_semantic_int_overflow_cast() {
+        // Expected Int32(500), received Int64 — semantic comparison
+        // should cast Int64→Int32 (overflow-safe) and handle the result,
+        // OR fall back when the cast fails (the exact behavior is
+        // implementation-defined; we only verify it doesn't panic).
+        let v500 = serde_json::json!(500);
+        let expected: Vec<&serde_json::Value> = vec![&v500];
+        let received: Vec<arrow::array::ArrayRef> =
+            vec![Arc::new(arrow::array::Int64Array::from(vec![500]))];
+        let result = compare_semantic(
+            &expected,
+            &received,
+            Some(&arrow::datatypes::DataType::Int32),
+        );
+        // 500 fits in both Int32 and Int64, semantic compare should match.
+        assert!(
+            result.r#match,
+            "Int32(500) vs Int64(500) should match semantically"
+        );
+    }
+
+    #[test]
+    fn test_compare_semantic_boolean_values() {
+        let v_true = serde_json::json!(true);
+        let v_false = serde_json::json!(false);
+        let expected: Vec<&serde_json::Value> = vec![&v_true, &v_false];
+        let received: Vec<arrow::array::ArrayRef> = vec![
+            Arc::new(arrow::array::BooleanArray::from(vec![true])),
+            Arc::new(arrow::array::BooleanArray::from(vec![false])),
+        ];
+        let result = compare_semantic(&expected, &received, None);
+        assert!(
+            result.r#match,
+            "boolean arrays should match, got {result:#?}"
+        );
+    }
 }
