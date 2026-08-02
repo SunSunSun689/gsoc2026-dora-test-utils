@@ -390,20 +390,19 @@ fn write_record_output(
 
     // Serialize each received Arrow array to JSON values.
     let mut all_rows: Vec<serde_json::Value> = Vec::new();
-    let mut data_type: Option<String> = None;
+    let mut data_type_json: Option<serde_json::Value> = None;
 
     for array in received {
-        if data_type.is_none() {
-            // Serialize via serde so that the output is parseable by
-            // serde_json::from_value::<DataType> (used in run_test_sink).
-            // `format!("{:?}")` produces Debug output which diverges from
-            // serde for complex types like Struct, List, Timestamp, Decimal.
-            data_type = serde_json::to_value(array.data_type())
-                .ok()
-                .map(|v| match v {
-                    serde_json::Value::String(s) => s,
-                    other => other.to_string(),
-                });
+        if data_type_json.is_none() {
+            // Serialize via serde so the output is parseable by
+            // serde_json::from_value::<DataType> in run_test_sink.
+            // Store the raw serde_json::Value — simple types become JSON
+            // strings ("Int32"), complex types become JSON objects
+            // ({"Timestamp": ["Microsecond", null]}).  Both round-trip
+            // through serde_json::from_value correctly.
+            // The old format!("{:?}") approach produced Debug strings
+            // that were unparseable for Struct/List/Timestamp/Decimal.
+            data_type_json = serde_json::to_value(array.data_type()).ok();
         }
 
         let schema = Schema::new(vec![Field::new("data", array.data_type().clone(), true)]);
@@ -430,7 +429,7 @@ fn write_record_output(
 
     let record_json = serde_json::json!({
         "data": all_rows,
-        "data_type": data_type.unwrap_or_else(|| "Unknown".to_string()),
+        "data_type": data_type_json.unwrap_or(serde_json::Value::String("Unknown".to_string())),
         "count": all_rows.len(),
     });
 
@@ -711,5 +710,69 @@ mod tests {
         assert!(parsed["data"].is_array());
         assert_eq!(parsed["data"].as_array().unwrap().len(), 3);
         // Values should be 10, 20, 30 (may be nested under "data" key).
+    }
+
+    // ── Conversion error + cast failure edge cases ──────────────
+
+    #[test]
+    fn test_compare_semantic_null_value_conversion_error() {
+        // serde_json::Value::Null cannot be converted to Arrow — should
+        // produce a conversion-error Difference, not a panic.
+        let null_val = serde_json::Value::Null;
+        let expected: Vec<&serde_json::Value> = vec![&null_val];
+        let received: Vec<arrow::array::ArrayRef> =
+            vec![Arc::new(arrow::array::Int64Array::from(vec![42]))];
+        let result = compare_semantic(&expected, &received, None);
+        assert!(
+            !result.r#match,
+            "Null vs Int64 should not match, got {result:#?}"
+        );
+        assert!(!result.differences.is_empty());
+        // Should contain a conversion-error Difference mentioning "null"
+        assert!(
+            result
+                .differences
+                .iter()
+                .any(|d| d.message.to_lowercase().contains("null")),
+            "should mention null in differences, got {result:#?}"
+        );
+    }
+
+    #[test]
+    fn test_compare_semantic_int_overflow_cast() {
+        // Expected Int32(500), received Int64 — semantic comparison
+        // should cast Int64→Int32 (overflow-safe) and handle the result,
+        // OR fall back when the cast fails (the exact behavior is
+        // implementation-defined; we only verify it doesn't panic).
+        let v500 = serde_json::json!(500);
+        let expected: Vec<&serde_json::Value> = vec![&v500];
+        let received: Vec<arrow::array::ArrayRef> =
+            vec![Arc::new(arrow::array::Int64Array::from(vec![500]))];
+        let result = compare_semantic(
+            &expected,
+            &received,
+            Some(&arrow::datatypes::DataType::Int32),
+        );
+        // 500 fits in both Int32 and Int64, semantic compare should match.
+        assert!(
+            result.r#match,
+            "Int32(500) vs Int64(500) should match semantically"
+        );
+    }
+
+    #[test]
+    fn test_compare_semantic_boolean_values() {
+        let v_true = serde_json::json!(true);
+        let v_false = serde_json::json!(false);
+        let expected: Vec<&serde_json::Value> = vec![&v_true, &v_false];
+        let received: Vec<arrow::array::ArrayRef> = vec![
+            Arc::new(arrow::array::BooleanArray::from(vec![true])),
+            Arc::new(arrow::array::BooleanArray::from(vec![false])),
+        ];
+        let result = compare_semantic(&expected, &received, None);
+        assert!(
+            result.r#match,
+            "boolean arrays should match, got {result:#?}"
+        );
     }
 }

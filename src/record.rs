@@ -379,15 +379,15 @@ impl ReplaySession {
             return Err(ReplayError::NoSinksConfigured);
         }
 
-        // Sinks registered via replay_sink() that aren't in the baseline
-        // will be reported as Extra in the DiffReport rather than rejected.
-        // Unregistered baseline sinks will be reported as Missing.
-
-        // Delete stale output files from prior runs — if dora doesn't produce
-        // a new file (e.g. node removed the sink), we must not compare against
-        // a leftover file and falsely report Match.
-        for (_, output_file) in &self.sinks {
-            let _ = std::fs::remove_file(output_file);
+        // Fast-fail: sinks registered via replay_sink() must exist in the
+        // baseline — a typo'd sink ID would otherwise cost a full dora run
+        // before surfacing as a confusing SinkOutputMissing error.
+        // Sinks in the baseline that AREN'T registered will be reported as
+        // Missing in the DiffReport (see compare_recordings).
+        for (sink_id, _) in &self.sinks {
+            if !self.recording.sinks.contains_key(sink_id) {
+                return Err(ReplayError::SinkNotInBaseline(sink_id.clone()));
+            }
         }
 
         // Resolve YAML path.
@@ -400,18 +400,45 @@ impl ReplaySession {
             return Err(ReplayError::DataflowNotFound(yaml_path));
         }
 
-        // Resolve timeout.
-        let timeout = self.timeout_override.unwrap_or(Duration::from_secs_f64(
-            self.recording.metadata.timeout_secs.max(0.1),
-        ));
+        // Resolve timeout.  Clamp to a safe range to prevent panics from
+        // Duration::from_secs_f64 (rejects NaN, infinite, or values exceeding
+        // the library's internal maximum — see std::time::Duration).
+        let raw_secs = self.recording.metadata.timeout_secs;
+        let clamped = raw_secs.clamp(0.1, 3600.0);
+        if !clamped.is_finite() {
+            return Err(ReplayError::Io(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                format!("recording timeout_secs is not a finite number: {raw_secs}"),
+            )));
+        }
+        let timeout = self
+            .timeout_override
+            .unwrap_or(Duration::from_secs_f64(clamped));
 
         // Locate dora binary.
         let dora = find_dora_binary();
 
+        // Delete stale output files from prior runs AFTER all validation —
+        // if we fail before this point (e.g. DataflowNotFound), the user's
+        // data is untouched.  Errors from remove_file are non-fatal on
+        // best-effort basis but we still warn via debug log.
+        for (_, output_file) in &self.sinks {
+            if let Err(e) = std::fs::remove_file(output_file) {
+                if e.kind() != std::io::ErrorKind::NotFound {
+                    // Permission error or other unexpected failure — log but
+                    // don't fail the run; dora may still write a fresh file.
+                    eprintln!(
+                        "warning: failed to remove stale output '{}': {e}",
+                        output_file.display()
+                    );
+                }
+            }
+        }
+
         // Run dora run with --stop-after.  dora CLI's duration-str parser
         // (v0.5.1) only accepts whole seconds ("10s"), not decimals ("0.5s"),
         // so we ceil to the nearest whole second with a minimum of 1.
-        let timeout_secs = timeout.as_secs_f64().max(0.1).ceil() as u64;
+        let timeout_secs = (timeout.as_secs_f64().max(0.1).ceil() as u64).max(1);
         let stop_after = format!("{}s", timeout_secs);
         let yaml_str = yaml_path.to_str().ok_or_else(|| {
             ReplayError::Io(std::io::Error::new(
@@ -463,8 +490,13 @@ impl ReplaySession {
         // Compare.
         let report = compare_recordings(&self.recording.sinks, &current_sinks);
 
+        // Build metadata reflecting the actual values used (overrides applied).
+        let mut effective_metadata = self.recording.metadata.clone();
+        effective_metadata.dataflow_yaml = yaml_path.to_string_lossy().to_string();
+        effective_metadata.timeout_secs = timeout.as_secs_f64();
+
         Ok(ReplayResult {
-            metadata: self.recording.metadata.clone(),
+            metadata: effective_metadata,
             baseline_sinks: self.recording.sinks.clone(),
             current_sinks,
             report,
@@ -497,7 +529,12 @@ pub struct RecordingMetadata {
     pub dataflow_yaml: String,
     /// Unix timestamp when the recording was made.
     pub recorded_at_unix: u64,
-    /// Timeout duration in seconds (sub-second precision).
+    /// Timeout duration in seconds.
+    ///
+    /// Stored as the duration originally passed to RecordSession::with_timeout
+    /// (or the default 30s).  ReplaySession rounds up to a whole second for
+    /// --stop-after (dora CLI only accepts integer durations); the stored
+    /// value is preserved at full precision.
     pub timeout_secs: f64,
     /// Version string from `dora --version`.
     pub dora_version: String,
@@ -759,6 +796,8 @@ fn compare_recordings(
         }
     }
 
+    // Stable ordering — HashMap iteration is non-deterministic (RandomState).
+    regressions.sort_by(|a, b| a.sink_id.cmp(&b.sink_id));
     DiffReport { regressions }
 }
 
@@ -793,17 +832,25 @@ fn compare_sink_outputs(
             diffs.retain(|d| !is_data_path(&d.path));
             let semantic_diffs = compare_data_semantic(baseline_data, current_data);
 
-            // Enrich semantic diffs with actual values from json-level diffs.
-            for sd in semantic_diffs {
-                let json_path = format!(".{}", sd.path);
-                if let Some(jd) = data_json_diffs.iter().find(|d| d.path == json_path) {
-                    diffs.push(FieldDiff {
-                        path: sd.path,
-                        baseline: jd.baseline.clone(),
-                        current: jd.current.clone(),
-                    });
-                } else {
-                    diffs.push(sd);
+            if semantic_diffs.is_empty() {
+                // Semantic comparison found no diffs — but the JSON layer did.
+                // Keep the original json diffs so real value differences aren't
+                // silently swallowed (e.g. f64-widening erases large-integer
+                // differences, or element-unwrap hides field-level changes).
+                diffs.extend(data_json_diffs);
+            } else {
+                // Enrich semantic diffs with actual values from json-level diffs.
+                for sd in semantic_diffs {
+                    let json_path = format!(".{}", sd.path);
+                    if let Some(jd) = data_json_diffs.iter().find(|d| d.path == json_path) {
+                        diffs.push(FieldDiff {
+                            path: sd.path,
+                            baseline: jd.baseline.clone(),
+                            current: jd.current.clone(),
+                        });
+                    } else {
+                        diffs.push(sd);
+                    }
                 }
             }
         }
@@ -869,7 +916,18 @@ fn json_diff(
             }
         }
         _ => {
-            if baseline != current {
+            // serde_json::Value::Number cross-type comparison (PosInt vs Float)
+            // always returns false even for numerically equal values (e.g. 3 vs
+            // 3.0).  Normalize through f64 before comparing so metadata fields
+            // like "count" don't produce spurious Mismatch on representation
+            // changes.
+            let is_eq = match (baseline, current) {
+                (serde_json::Value::Number(a), serde_json::Value::Number(b)) => {
+                    a.as_f64() == b.as_f64()
+                }
+                _ => baseline == current,
+            };
+            if !is_eq {
                 diffs.push(FieldDiff {
                     path: path(""),
                     baseline: baseline.clone(),
@@ -1089,5 +1147,225 @@ mod tests {
         assert!(display.contains("Regressions detected"));
         assert!(display.contains("MISMATCH"));
         assert!(display.contains("count"));
+    }
+
+    // ── compare_recordings direct tests ──────────────────────────
+
+    #[test]
+    fn test_compare_recordings_match() {
+        let mut baseline = HashMap::new();
+        baseline.insert("s1".into(), serde_json::json!({"data": [1, 2], "count": 2}));
+        let mut current = HashMap::new();
+        current.insert("s1".into(), serde_json::json!({"data": [1, 2], "count": 2}));
+        let report = compare_recordings(&baseline, &current);
+        assert_eq!(report.regressions.len(), 1);
+        assert_eq!(report.regressions[0].status, DiffStatus::Match);
+    }
+
+    #[test]
+    fn test_compare_recordings_missing() {
+        let mut baseline = HashMap::new();
+        baseline.insert("s1".into(), serde_json::json!({"data": [1]}));
+        baseline.insert("s2".into(), serde_json::json!({"data": [2]}));
+        let current = HashMap::new(); // both missing
+        let report = compare_recordings(&baseline, &current);
+        assert_eq!(report.regressions.len(), 2);
+        assert!(report
+            .regressions
+            .iter()
+            .all(|r| r.status == DiffStatus::Missing));
+    }
+
+    #[test]
+    fn test_compare_recordings_extra() {
+        let baseline = HashMap::new();
+        let mut current = HashMap::new();
+        current.insert("s1".into(), serde_json::json!({"data": [1]}));
+        let report = compare_recordings(&baseline, &current);
+        assert_eq!(report.regressions.len(), 1);
+        assert_eq!(report.regressions[0].status, DiffStatus::Extra);
+    }
+
+    #[test]
+    fn test_compare_recordings_mixed() {
+        let mut baseline = HashMap::new();
+        baseline.insert("match-sink".into(), serde_json::json!({"data": [1]}));
+        baseline.insert("missing-sink".into(), serde_json::json!({"data": [2]}));
+        let mut current = HashMap::new();
+        current.insert("match-sink".into(), serde_json::json!({"data": [1]}));
+        current.insert("mismatch-sink".into(), serde_json::json!({"data": [99]}));
+        current.insert("extra-sink".into(), serde_json::json!({"data": [3]}));
+        let report = compare_recordings(&baseline, &current);
+
+        let statuses: Vec<_> = report
+            .regressions
+            .iter()
+            .map(|r| (r.sink_id.as_str(), &r.status))
+            .collect();
+        // match-sink: present in both, identical → Match
+        assert!(statuses.contains(&("match-sink", &DiffStatus::Match)));
+        // missing-sink: in baseline but NOT in current → Missing
+        assert!(statuses.contains(&("missing-sink", &DiffStatus::Missing)));
+        // mismatch-sink: in current but NOT in baseline → Extra
+        assert!(statuses.contains(&("mismatch-sink", &DiffStatus::Extra)));
+        // extra-sink: in current but NOT in baseline → Extra
+        assert!(statuses.contains(&("extra-sink", &DiffStatus::Extra)));
+    }
+
+    // ── compare_sink_outputs: .data prefix fix ──────────────────
+
+    #[test]
+    fn test_data_type_diff_preserved() {
+        // .data identical but .data_type differs — should NOT be stripped
+        // by the .data prefix retain (fix #1).
+        let baseline = serde_json::json!({"data": [1, 2, 3], "data_type": "Int32", "count": 3});
+        let current = serde_json::json!({"data": [1, 2, 3], "data_type": "Int64", "count": 3});
+        let diffs = compare_sink_outputs("test", &baseline, &current);
+        // .data_type differs and starts_with(".data") was the bug — should
+        // now be preserved as a FieldDiff.
+        assert!(
+            diffs.iter().any(|d| d.path.contains("data_type")),
+            "data_type diff should be preserved, got diffs: {diffs:?}"
+        );
+    }
+
+    #[test]
+    fn test_data_key_diff_still_detected() {
+        // .data itself differs — should trigger semantic comparison.
+        let baseline = serde_json::json!({"data": [1, 2, 3], "count": 3});
+        let current = serde_json::json!({"data": [1, 2, 99], "count": 3});
+        let diffs = compare_sink_outputs("test", &baseline, &current);
+        assert!(!diffs.is_empty(), "data difference should be detected");
+    }
+
+    // ── json_diff edge cases ────────────────────────────────────
+
+    #[test]
+    fn test_json_diff_nested_objects() {
+        let baseline = serde_json::json!({"meta": {"version": 1, "tags": ["a", "b"]}});
+        let current = serde_json::json!({"meta": {"version": 2, "tags": ["a", "c"]}});
+        let mut diffs = Vec::new();
+        json_diff("", &baseline, &current, &mut diffs);
+        // Two differences: .meta.version and .meta.tags[1]
+        assert_eq!(diffs.len(), 2);
+        assert!(
+            diffs.iter().any(|d| d.path == ".meta.version"),
+            "should detect .meta.version diff"
+        );
+        assert!(
+            diffs.iter().any(|d| d.path == ".meta.tags[1]"),
+            "should detect .meta.tags[1] diff"
+        );
+    }
+
+    #[test]
+    fn test_json_diff_null_values() {
+        let baseline = serde_json::json!({"key": null, "other": 42});
+        let current = serde_json::json!({"key": "not-null", "other": 42});
+        let mut diffs = Vec::new();
+        json_diff("", &baseline, &current, &mut diffs);
+        assert_eq!(diffs.len(), 1);
+        assert_eq!(diffs[0].path, ".key");
+    }
+
+    #[test]
+    fn test_json_diff_extra_key_in_current() {
+        let baseline = serde_json::json!({"a": 1});
+        let current = serde_json::json!({"a": 1, "b": 2});
+        let mut diffs = Vec::new();
+        json_diff("", &baseline, &current, &mut diffs);
+        assert_eq!(diffs.len(), 1);
+        assert_eq!(diffs[0].path, ".b");
+    }
+
+    #[test]
+    fn test_json_diff_missing_key_in_current() {
+        let baseline = serde_json::json!({"a": 1, "b": 2});
+        let current = serde_json::json!({"a": 1});
+        let mut diffs = Vec::new();
+        json_diff("", &baseline, &current, &mut diffs);
+        assert_eq!(diffs.len(), 1);
+        assert_eq!(diffs[0].path, ".b");
+    }
+
+    // ── compare_data_semantic edge cases ─────────────────────────
+
+    #[test]
+    fn test_compare_data_semantic_length_mismatch() {
+        let baseline = serde_json::json!([1, 2, 3]);
+        let current = serde_json::json!([1, 2]);
+        let diffs = compare_data_semantic(&baseline, &current);
+        assert_eq!(diffs.len(), 1);
+        assert_eq!(diffs[0].path, "data.length");
+    }
+
+    #[test]
+    fn test_compare_data_semantic_empty_arrays() {
+        let baseline = serde_json::json!([]);
+        let current = serde_json::json!([]);
+        let diffs = compare_data_semantic(&baseline, &current);
+        assert!(diffs.is_empty());
+    }
+
+    #[test]
+    fn test_compare_data_semantic_string_fallback() {
+        // String elements in 'data' arrays use json_diff fallback
+        // (json_to_arrow_arrays only handles numbers).
+        let baseline = serde_json::json!(["hello", "world"]);
+        let current = serde_json::json!(["hello", "different"]);
+        let diffs = compare_data_semantic(&baseline, &current);
+        assert!(!diffs.is_empty());
+    }
+
+    // ── DiffReport edge cases ───────────────────────────────────
+
+    #[test]
+    fn test_diff_report_display_mixed_statuses() {
+        let report = DiffReport {
+            regressions: vec![
+                SinkDiff {
+                    sink_id: "match".into(),
+                    status: DiffStatus::Match,
+                    differences: vec![],
+                },
+                SinkDiff {
+                    sink_id: "missing".into(),
+                    status: DiffStatus::Missing,
+                    differences: vec![],
+                },
+                SinkDiff {
+                    sink_id: "extra".into(),
+                    status: DiffStatus::Extra,
+                    differences: vec![],
+                },
+            ],
+        };
+        let display = report.to_string();
+        assert!(display.contains("Regressions detected"));
+        assert!(display.contains("MISSING"));
+        assert!(display.contains("EXTRA"));
+        // "match" sink should NOT appear in the "bad" section
+        assert!(!display.contains("[match]"));
+    }
+
+    #[test]
+    fn test_diff_report_display_all_match_no_counts() {
+        let report = DiffReport {
+            regressions: vec![
+                SinkDiff {
+                    sink_id: "s1".into(),
+                    status: DiffStatus::Match,
+                    differences: vec![],
+                },
+                SinkDiff {
+                    sink_id: "s2".into(),
+                    status: DiffStatus::Match,
+                    differences: vec![],
+                },
+            ],
+        };
+        let display = report.to_string();
+        assert!(display.contains("No regressions"));
+        assert!(display.contains("2 sinks"));
     }
 }

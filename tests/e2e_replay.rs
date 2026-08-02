@@ -274,56 +274,34 @@ fn replay_override_dataflow() {
 }
 
 #[test]
-fn replay_sink_not_in_baseline_reported_as_extra() {
-    // Renamed from replay_sink_not_in_baseline: sinks registered via
-    // replay_sink() that aren't in the baseline are no longer a hard error
-    // — they are reported as Extra in the DiffReport (matching the design
-    // spec).  This test verifies the Extra path through compare_recordings
-    // by constructing a report manually (no dora CLI needed).
-    use std::collections::HashMap;
+fn replay_sink_not_in_baseline() {
+    // Fast-fail: a sink registered via replay_sink() that isn't in the
+    // baseline recording should error immediately with SinkNotInBaseline
+    // (avoiding a costly dora run that would end in SinkOutputMissing).
+    let tmp = tempfile::TempDir::new().unwrap();
 
-    let mut baseline = HashMap::new();
-    baseline.insert("known-sink".into(), serde_json::json!({"data": [1]}));
-
-    let mut current = HashMap::new();
-    current.insert("known-sink".into(), serde_json::json!({"data": [1]}));
-    current.insert("extra-sink".into(), serde_json::json!({"data": [2]}));
-
-    let meta = dora_test_utils::record::RecordingMetadata {
-        dataflow_yaml: "dummy.yml".into(),
-        recorded_at_unix: 0,
-        timeout_secs: 10.0,
-        dora_version: "test".into(),
+    let mut sinks = std::collections::HashMap::new();
+    sinks.insert("known-sink".into(), serde_json::json!({"data": [1]}));
+    let recording = Recording {
+        metadata: dora_test_utils::record::RecordingMetadata {
+            dataflow_yaml: tmp.path().join("dummy.yml").display().to_string(),
+            recorded_at_unix: 0,
+            timeout_secs: 10.0,
+            dora_version: "test".into(),
+        },
+        sinks,
     };
-    let report = DiffReport {
-        regressions: vec![
-            SinkDiff {
-                sink_id: "known-sink".into(),
-                status: DiffStatus::Match,
-                differences: vec![],
-            },
-            SinkDiff {
-                sink_id: "extra-sink".into(),
-                status: DiffStatus::Extra,
-                differences: vec![],
-            },
-        ],
-    };
+    let path = tmp.path().join("recording.json");
+    recording.save(&path).unwrap();
 
-    let result = dora_test_utils::ReplayResult {
-        metadata: meta,
-        baseline_sinks: baseline,
-        current_sinks: current,
-        report,
-    };
-
-    assert!(!result.is_clean());
-    let display = result.diff().to_string();
-    assert!(
-        display.contains("extra-sink"),
-        "diff should mention extra sink"
-    );
-    assert!(display.contains("EXTRA"), "diff should show EXTRA status");
+    // Register a sink NOT in the baseline.
+    let result = ReplaySession::load(&path)
+        .unwrap()
+        .replay_sink("unknown-sink", tmp.path().join("out.json"))
+        .run();
+    assert!(result.is_err());
+    let err = result.unwrap_err().to_string();
+    assert!(err.contains("unknown-sink") && err.contains("not found in baseline"));
 }
 
 #[test]
@@ -365,23 +343,19 @@ fn replay_diffreport_display_format() {
 
 #[test]
 fn replay_timeout_override_preserved_in_result() {
-    // Verify that with_timeout() override is used (not the recorded value)
-    // by constructing a recording with a dataflow that exists.
-    // This test doesn't need dora CLI — it constructs recordings manually
-    // and verifies the timeout resolution logic.
+    // Verify that with_timeout() override is accepted by the builder API
+    // and that Recording save/load preserves timeout_secs at full precision.
+    // The actual timeout resolution (override vs recorded) is tested by the
+    // e2e_record/replay tests that use a real dora CLI.
     let tmp = tempfile::TempDir::new().unwrap();
-
-    // Create a dummy dataflow file so DataflowNotFound error is avoided.
-    let dummy_yaml = tmp.path().join("dummy.yml");
-    std::fs::write(&dummy_yaml, "nodes: []\n").unwrap();
 
     let mut sinks = std::collections::HashMap::new();
     sinks.insert("s1".into(), serde_json::json!({"data": [1], "count": 1}));
     let recording = Recording {
         metadata: dora_test_utils::record::RecordingMetadata {
-            dataflow_yaml: dummy_yaml.display().to_string(),
+            dataflow_yaml: tmp.path().join("dummy.yml").display().to_string(),
             recorded_at_unix: 0,
-            timeout_secs: 1.0,
+            timeout_secs: 1.5, // fractional — stored at full precision
             dora_version: "test".into(),
         },
         sinks,
@@ -389,16 +363,18 @@ fn replay_timeout_override_preserved_in_result() {
     let path = tmp.path().join("recording.json");
     recording.save(&path).unwrap();
 
-    // Load with a timeout override.  run() will fail (no dora CLI), but
-    // the builder should accept the override.
-    let session = ReplaySession::load(&path)
+    // Round-trip: verify timeout_secs is preserved.
+    let loaded = Recording::load(&path).unwrap();
+    assert!(
+        (loaded.metadata.timeout_secs - 1.5).abs() < 0.001,
+        "timeout_secs should survive save/load round-trip"
+    );
+
+    // Verify the builder API accepts the override (type-check).
+    let _session = ReplaySession::load(&path)
         .unwrap()
         .replay_sink("s1", tmp.path().join("out.json"))
         .with_timeout(std::time::Duration::from_secs(60));
-
-    // The override is accepted — verified by the builder succeeding.
-    // If the override were rejected, we'd see a type error.
-    let _ = session; // use it so the compiler knows we exercised the API
 }
 
 #[test]

@@ -655,4 +655,81 @@ mod tests {
             "error should mention 'out of range', got: {msg}"
         );
     }
+
+    // ── DataType hints: previously untested types ──────────────
+
+    #[test]
+    fn test_json_to_arrow_uint16() {
+        let dt = arrow::datatypes::DataType::UInt16;
+        let arr = json_value_to_arrow_array(&serde_json::json!(1000), Some(&dt)).unwrap();
+        let uint_arr = arr
+            .as_any()
+            .downcast_ref::<arrow::array::UInt16Array>()
+            .expect("should be UInt16Array");
+        assert_eq!(uint_arr.value(0), 1000);
+    }
+
+    #[test]
+    fn test_json_to_arrow_uint64() {
+        let dt = arrow::datatypes::DataType::UInt64;
+        // Value within u64 range (above i64::MAX) — requires as_u64() path
+        let arr =
+            json_value_to_arrow_array(&serde_json::json!(9_223_372_036_854_775_808u64), Some(&dt))
+                .unwrap();
+        let uint_arr = arr
+            .as_any()
+            .downcast_ref::<arrow::array::UInt64Array>()
+            .expect("should be UInt64Array");
+        assert_eq!(uint_arr.value(0), 9_223_372_036_854_775_808);
+    }
+
+    // ── Object/array edge cases ─────────────────────────────────
+
+    #[test]
+    fn test_json_obj_to_arrow_struct_requires_hint() {
+        // JSON object without a data_type hint should error.
+        let obj = serde_json::json!({"x": 1, "y": 2});
+        let result = json_value_to_arrow_array(&obj, None);
+        assert!(result.is_err());
+        let msg = format!("{}", result.unwrap_err());
+        assert!(
+            msg.contains("explicit data_type hint"),
+            "error should mention explicit hint requirement, got: {msg}"
+        );
+    }
+
+    #[test]
+    fn test_heterogeneous_array_rejection() {
+        // [42, "hello"] should fail with a clear type-mismatch error.
+        let arr = serde_json::json!([42, "hello"]);
+        let result = json_value_to_arrow_array(&arr, None);
+        assert!(result.is_err());
+        let msg = format!("{:#}", result.unwrap_err());
+        assert!(
+            msg.contains("type mismatch"),
+            "error should mention type mismatch, got: {msg}"
+        );
+    }
+
+    #[test]
+    fn test_fractional_number_with_int64_hint() {
+        // 42.5 with Int64 hint — not representable.
+        let dt = arrow::datatypes::DataType::Int64;
+        let result = json_value_to_arrow_array(&serde_json::json!(42.5), Some(&dt));
+        assert!(result.is_err());
+        let msg = format!("{:#}", result.unwrap_err());
+        assert!(
+            msg.contains("not representable as Int64"),
+            "error should mention not representable, got: {msg}"
+        );
+    }
+
+    #[test]
+    fn test_uint16_overflow() {
+        let dt = arrow::datatypes::DataType::UInt16;
+        // 70000 > u16::MAX (65535)
+        let result = json_value_to_arrow_array(&serde_json::json!(70000), Some(&dt));
+        assert!(result.is_err());
+        assert!(format!("{:#}", result.unwrap_err()).contains("out of range for UInt16"));
+    }
 }

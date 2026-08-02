@@ -148,6 +148,12 @@ Code review of the Week 10 ReplaySession implementation found 15 issues.
 
 `replay_sink_not_in_baseline` → `replay_sink_not_in_baseline_reported_as_extra` (behavior changed: no longer a hard error, reported as Extra in DiffReport)
 
+### Commits
+
+| Commit | Description |
+|--------|-------------|
+| `dfa071a` | fix: 13 code-review findings — comparison correctness, CI coverage, type fidelity |
+
 ### Verification
 
 - `cargo check` ✅
@@ -158,6 +164,30 @@ Code review of the Week 10 ReplaySession implementation found 15 issues.
 - `cargo test --test e2e_record -- --test-threads=1` ✅ (4/4 pass)
 - `cargo test --test e2e_replay -- --test-threads=1` ✅ (11/11 pass)
 - `cargo test --test smoke -- --test-threads=1` ✅ (3/3 pass)
+
+## Week 12 (2026-08-02): Demo script, README, edge-case tests
+
+### Changes
+
+- **`examples/demo_replay.rs`**: Record→Replay→regression detection showcase
+- **`scripts/demo-week12.sh`**: full demo script (build + demo + test suite)
+- **`README.md`**: Updated API docs, Record/Replay examples, test counts (52→80), API stability table
+- **Edge-case tests**: +28 unit tests (80 total) covering compare_recordings, json_diff, compare_data_semantic, DiffReport, NodeHarness, TestSink, TestSource
+
+### Commits
+
+| Commit | Description |
+|--------|-------------|
+| `98d1f24` | docs: Week 12 — demo script, README update, edge-case tests |
+| `5abca01` | docs: annotate upstream flume->tokio-mpsc migration plan |
+
+### Verification
+
+- `cargo check` ✅
+- `cargo fmt --check` ✅
+- `cargo clippy --lib` ✅
+- `cargo test --lib` ✅ (80/80 pass)
+- `cargo test --test e2e` ✅ (5/5 pass)
 
 ## Remaining Plan (Adjusted 2026-07-27)
 
