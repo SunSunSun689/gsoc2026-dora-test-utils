@@ -238,10 +238,16 @@ fn number_to_arrow_array(
             }
         }
         // When the caller didn't request a specific type, infer from the
-        // JSON number's shape (integer → Int64, float → Float64).
+        // JSON number's shape (integer → Int64, large unsigned → UInt64,
+        // fractional → Float64).
         None => {
             if let Some(i) = n.as_i64() {
                 Ok(Arc::new(arrow::array::Int64Array::from(vec![i])))
+            } else if let Some(u) = n.as_u64() {
+                // Value > i64::MAX but fits in u64 — preserve exact integer.
+                // serde_json's as_f64() returns Some for every number, so
+                // Float64-first would silently truncate large unsigned values.
+                Ok(Arc::new(arrow::array::UInt64Array::from(vec![u])))
             } else if let Some(f) = n.as_f64() {
                 Ok(Arc::new(arrow::array::Float64Array::from(vec![f])))
             } else {

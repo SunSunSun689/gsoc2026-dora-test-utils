@@ -379,11 +379,15 @@ impl ReplaySession {
             return Err(ReplayError::NoSinksConfigured);
         }
 
-        // Validate that all registered sinks exist in the baseline.
-        for (sink_id, _) in &self.sinks {
-            if !self.recording.sinks.contains_key(sink_id) {
-                return Err(ReplayError::SinkNotInBaseline(sink_id.clone()));
-            }
+        // Sinks registered via replay_sink() that aren't in the baseline
+        // will be reported as Extra in the DiffReport rather than rejected.
+        // Unregistered baseline sinks will be reported as Missing.
+
+        // Delete stale output files from prior runs — if dora doesn't produce
+        // a new file (e.g. node removed the sink), we must not compare against
+        // a leftover file and falsely report Match.
+        for (_, output_file) in &self.sinks {
+            let _ = std::fs::remove_file(output_file);
         }
 
         // Resolve YAML path.
@@ -404,8 +408,10 @@ impl ReplaySession {
         // Locate dora binary.
         let dora = find_dora_binary();
 
-        // Run dora run.
-        let timeout_secs = timeout.as_secs_f64().max(0.1);
+        // Run dora run with --stop-after.  dora CLI's duration-str parser
+        // (v0.5.1) only accepts whole seconds ("10s"), not decimals ("0.5s"),
+        // so we ceil to the nearest whole second with a minimum of 1.
+        let timeout_secs = timeout.as_secs_f64().max(0.1).ceil() as u64;
         let stop_after = format!("{}s", timeout_secs);
         let yaml_str = yaml_path.to_str().ok_or_else(|| {
             ReplayError::Io(std::io::Error::new(
@@ -562,8 +568,15 @@ impl RecordSession {
         // ── 2. Get dora version ────────────────────────────────
         let dora_version = get_dora_version(&dora).unwrap_or_else(|_| "unknown".to_string());
 
+        // ── 2b. Delete stale output files ───────────────────────
+        for (_, output_file) in &self.sinks {
+            let _ = std::fs::remove_file(output_file);
+        }
+
         // ── 3. Run dora run ────────────────────────────────────
-        let timeout_secs = self.timeout.as_secs_f64().max(0.1);
+        // ceil to whole seconds (dora CLI duration-str parser v0.5.1
+        // only accepts integer-duration format like "10s").
+        let timeout_secs = self.timeout.as_secs_f64().max(0.1).ceil() as u64;
         let stop_after = format!("{}s", timeout_secs);
         let yaml_str = self.dataflow_yaml.to_str().ok_or_else(|| {
             RecordError::Io(std::io::Error::new(
@@ -619,14 +632,20 @@ impl RecordSession {
         }
 
         // ── 5. Build recording ─────────────────────────────────
+        // Canonicalize the YAML path so the recording is self-contained
+        // and replayable from any working directory.
+        let canonical_yaml = self
+            .dataflow_yaml
+            .canonicalize()
+            .unwrap_or_else(|_| self.dataflow_yaml.clone());
         Ok(Recording {
             metadata: RecordingMetadata {
-                dataflow_yaml: self.dataflow_yaml.to_string_lossy().to_string(),
+                dataflow_yaml: canonical_yaml.to_string_lossy().to_string(),
                 recorded_at_unix: std::time::SystemTime::now()
                     .duration_since(std::time::UNIX_EPOCH)
                     .unwrap_or_default()
                     .as_secs(),
-                timeout_secs,
+                timeout_secs: timeout_secs as f64,
                 dora_version,
             },
             sinks,
@@ -753,15 +772,40 @@ fn compare_sink_outputs(
     json_diff("", baseline, current, &mut diffs);
 
     // If JSON diff found differences in a "data" array, try semantic
-    // comparison as a second pass.
-    let has_data_diff = diffs.iter().any(|d| d.path.starts_with(".data"));
+    // comparison as a second pass.  Match ".data" exactly or ".data[" for
+    // array indices — must NOT match siblings like ".data_type".
+    fn is_data_path(p: &str) -> bool {
+        p == ".data" || p.starts_with(".data[")
+    }
+    let has_data_diff = diffs.iter().any(|d| is_data_path(&d.path));
     if has_data_diff {
         if let (Some(baseline_data), Some(current_data)) =
             (baseline.get("data"), current.get("data"))
         {
-            diffs.retain(|d| !d.path.starts_with(".data"));
+            // Capture json-level diffs for data fields before retain so
+            // we can enrich semantic diffs with actual values (Fix #7).
+            let data_json_diffs: Vec<FieldDiff> = diffs
+                .iter()
+                .filter(|d| is_data_path(&d.path))
+                .cloned()
+                .collect();
+
+            diffs.retain(|d| !is_data_path(&d.path));
             let semantic_diffs = compare_data_semantic(baseline_data, current_data);
-            diffs.extend(semantic_diffs);
+
+            // Enrich semantic diffs with actual values from json-level diffs.
+            for sd in semantic_diffs {
+                let json_path = format!(".{}", sd.path);
+                if let Some(jd) = data_json_diffs.iter().find(|d| d.path == json_path) {
+                    diffs.push(FieldDiff {
+                        path: sd.path,
+                        baseline: jd.baseline.clone(),
+                        current: jd.current.clone(),
+                    });
+                } else {
+                    diffs.push(sd);
+                }
+            }
         }
     }
 
@@ -859,7 +903,12 @@ fn compare_data_semantic(
         return diffs;
     }
 
-    let baseline_refs: Vec<&serde_json::Value> = baseline_arr.iter().collect();
+    // Unwrap ".data" sub-key from elements if present, matching the
+    // treatment in json_to_arrow_arrays so both sides are symmetric.
+    let baseline_refs: Vec<&serde_json::Value> = baseline_arr
+        .iter()
+        .map(|elem| elem.get("data").unwrap_or(elem))
+        .collect();
 
     // Convert current to Arrow arrays.
     let c_arrays = match json_to_arrow_arrays(current) {
@@ -916,12 +965,16 @@ fn json_to_arrow_arrays(value: &serde_json::Value) -> Result<Vec<arrow::array::A
         let data_val = elem.get("data").unwrap_or(elem);
         let arr: arrow::array::ArrayRef = match data_val {
             serde_json::Value::Number(n) => {
-                // Try Float64 first (preserves fractional parts),
-                // then fall back to Int64 for whole numbers.
-                if let Some(f) = n.as_f64() {
-                    Arc::new(arrow::array::Float64Array::from(vec![f]))
-                } else if let Some(i) = n.as_i64() {
+                // Try Int64 first (preserves exact integer values),
+                // then UInt64 for large unsigned, then Float64 last.
+                // serde_json's as_f64() returns Some for EVERY number,
+                // so Float64-first would dead-code the integer branches.
+                if let Some(i) = n.as_i64() {
                     Arc::new(arrow::array::Int64Array::from(vec![i]))
+                } else if let Some(u) = n.as_u64() {
+                    Arc::new(arrow::array::UInt64Array::from(vec![u]))
+                } else if let Some(f) = n.as_f64() {
+                    Arc::new(arrow::array::Float64Array::from(vec![f]))
                 } else {
                     return Err("non-numeric value in data array".into());
                 }

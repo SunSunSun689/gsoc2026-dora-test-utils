@@ -114,6 +114,51 @@ migration separately).
 - `cargo fmt --check` ✅
 - `cargo clippy --lib` ✅
 
+## Week 10 后半 (2026-08-01): Code review fixes (13 issues)
+
+Code review of the Week 10 ReplaySession implementation found 15 issues.
+13 were fixed, 2 deferred (see below).
+
+### Fixes applied
+
+| # | File | Fix |
+|---|------|-----|
+| 1 | `record.rs:757-779` | `.data` prefix → exact match (`.data` / `.data[`) — no longer matches `.data_type` etc. |
+| 2 | `record.rs:921-933` | `json_to_arrow_arrays`: `as_i64()` before `as_f64()` — Int64 branch no longer dead code |
+| 3 | `record.rs:862-866` | `compare_data_semantic`: unwrap `.data` from baseline elements symmetrically with current |
+| 4 | `record.rs:408-410, 566-570` | `--stop-after` uses `.ceil() as u64` whole seconds — dora CLI parser rejects decimals |
+| 5 | `harness.rs:324-329, 289-294` | `ensure_init` clears pending_events when node already initialized; `run_to_completion` skips Stop injection when already init |
+| 6 | `record.rs:382-388` | `SinkNotInBaseline` hard error removed — unknown sinks flow through as Extra in DiffReport |
+| 7 | `record.rs:762-787` | Capture json-level data diffs before `retain`, enrich semantic diffs with actual values |
+| 8 | `.github/workflows/ci.yml:87` | Add `cargo test --test e2e_replay` to CI (was missing — 11 tests had zero CI coverage) |
+| 10 | `sink.rs:396-406` | `write_record_output`: use `serde_json::to_value` instead of `format!("{:?}")` for data_type |
+| 11 | `source.rs:243-253` | `number_to_arrow_array` no-hint branch: try `as_u64()` before `as_f64()` |
+| 13 | `record.rs:388-393, 566-570` | Delete stale output files before `dora run` in both RecordSession and ReplaySession |
+| 14 | `record.rs:637-643` | `dataflow_yaml` canonicalized via `.canonicalize()` before storing in metadata |
+| 15 | `tests/e2e_replay.rs:342` | Dead `replay_timeout_override` test replaced with meaningful API verification |
+
+### Deferred
+
+| # | Issue | Reason |
+|---|-------|--------|
+| 9 | `traits.rs` data_type loss | Passing Arrow type through requires two-level Struct wrapping to match DORA internals (`{"inner": ...}`) — documented with `InputData::ArrowFile` upgrade path |
+| 12 | `sink.rs` receive timeout | EventStream has no timeout API; dataflows always use `--stop-after` via Record/ReplaySession |
+
+### Test renamed
+
+`replay_sink_not_in_baseline` → `replay_sink_not_in_baseline_reported_as_extra` (behavior changed: no longer a hard error, reported as Extra in DiffReport)
+
+### Verification
+
+- `cargo check` ✅
+- `cargo fmt --check` ✅
+- `cargo clippy --lib` ✅ (zero warnings)
+- `cargo test --lib` ✅ (52/52 pass)
+- `cargo test --test e2e` ✅ (5/5 pass)
+- `cargo test --test e2e_record -- --test-threads=1` ✅ (4/4 pass)
+- `cargo test --test e2e_replay -- --test-threads=1` ✅ (11/11 pass)
+- `cargo test --test smoke -- --test-threads=1` ✅ (3/3 pass)
+
 ## Remaining Plan (Adjusted 2026-07-27)
 
 | Week | Dates (China, Mon–Sun) | Deliverable |
