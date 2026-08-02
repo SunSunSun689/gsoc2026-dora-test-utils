@@ -59,6 +59,14 @@ impl IntoInputData for arrow::array::ArrayData {
         let value: serde_json::Value =
             serde_json::from_slice(&buf).expect("IntoInputData: Arrow JSON output is valid JSON");
 
+        // NOTE: data_type is kept as None because DORA's read_input_data wraps
+        // each element in {"inner": ...} before applying the schema, and the
+        // schema's field name must match "inner" (not "data").  Computing the
+        // correct two-level Struct type that accounts for both the RecordBatch
+        // wrapping ("data") and DORA's internal wrapping ("inner") is fragile
+        // and depends on DORA internals.  A proper fix should use
+        // InputData::ArrowFile instead of InputData::JsonObject to preserve
+        // exact Arrow types without JSON round-tripping.
         InputData::JsonObject {
             data: value,
             data_type: None,

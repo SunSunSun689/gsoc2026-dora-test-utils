@@ -84,3 +84,4 @@ jobs:
       - run: cargo test --test integration -- --test-threads=1
       # Record/replay e2e tests (need dora CLI + test binaries built above).
       - run: timeout 120 cargo test --test e2e_record -- --test-threads=1
+      - run: timeout 120 cargo test --test e2e_replay -- --test-threads=1

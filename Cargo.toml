@@ -20,12 +20,12 @@ serde = { version = "1", features = ["derive"] }
 # DORA node API — the primary integration surface.
 #
 # Pinned to commit 45436aad by mentor decision (2026-06-01 Weekly Sync,
-# Discussion #17).  Uses git dependency (not vendored path) — the crate
-# builds from a clean checkout with `cargo fetch` alone.
+# Discussion #17).  Uses git dependency (not vendored path).
 #
-# NodeHarness uses TestingInput::Input (baked events) with deferred node
-# construction — no live Channel needed, no vendored patch required.
-# Upstream tracking for Channel API: dora-rs/dora#2855.
+# Upstream PR (a) pending: TestingOutput::ToChannel flume->tokio::sync::mpsc
+# migration (mentor Week 7 Discussion #28, "Start here").  Code is ready in
+# the local dora/ clone.  Once merged, update the rev and switch harness.rs
+# from flume to tokio::sync::mpsc.
 dora-node-api = { git = "https://github.com/dora-rs/dora.git", rev = "45436aad124fe46463d0b0411e3922dae8ee9ebd" }
 
 # Arrow: must match the version used by the pinned DORA commit.
@@ -33,10 +33,8 @@ dora-node-api = { git = "https://github.com/dora-rs/dora.git", rev = "45436aad12
 arrow = "58"
 arrow-json = "58"
 
-# Flume: used for the output channel (TestingOutput::ToChannel).
-# Upstream 45436aad uses flume::Sender for this; we keep it until
-# the upstream ToChannel→tokio-mpsc PR (mentor Week 7, Discussion #28)
-# is merged.
+# Flume: required while upstream 45436aad uses flume::Sender for
+# TestingOutput::ToChannel.  Remove once upstream PR (a) is merged.
 flume = "0.10"
 
 # Tokio: async runtime used by DORA and our harness.

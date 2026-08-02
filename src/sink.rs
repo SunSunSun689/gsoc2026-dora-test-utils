@@ -394,7 +394,16 @@ fn write_record_output(
 
     for array in received {
         if data_type.is_none() {
-            data_type = Some(format!("{:?}", array.data_type()));
+            // Serialize via serde so that the output is parseable by
+            // serde_json::from_value::<DataType> (used in run_test_sink).
+            // `format!("{:?}")` produces Debug output which diverges from
+            // serde for complex types like Struct, List, Timestamp, Decimal.
+            data_type = serde_json::to_value(array.data_type())
+                .ok()
+                .map(|v| match v {
+                    serde_json::Value::String(s) => s,
+                    other => other.to_string(),
+                });
         }
 
         let schema = Schema::new(vec![Field::new("data", array.data_type().clone(), true)]);

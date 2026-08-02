@@ -79,6 +79,7 @@ pub struct NodeHarness {
     pending_events: Vec<TimedIncomingEvent>,
     /// Output channel sender.  Created eagerly in [`new`](Self::new) so
     /// `recv_output` works before init; consumed by `ensure_init`.
+    /// TODO: switch to tokio::sync::mpsc::Sender once upstream PR (a) merges.
     output_tx: Option<flume::Sender<serde_json::Map<String, serde_json::Value>>>,
     /// Receiver for outputs captured via [`TestingOutput::ToChannel`].
     output_rx: flume::Receiver<serde_json::Map<String, serde_json::Value>>,
@@ -108,7 +109,8 @@ impl NodeHarness {
     pub fn new() -> Result<Self, NodeError> {
         // Unbounded flume channel for output capture.
         // Upstream `TestingOutput::ToChannel` uses `flume::Sender` (the
-        // tokio-mpsc migration is pending in a separate upstream PR).
+        // tokio-mpsc migration is pending in upstream PR (a) — mentor
+        // Week 7 Discussion #28).
         let (output_tx, output_rx) = flume::unbounded();
 
         Ok(Self {
@@ -287,8 +289,14 @@ impl NodeHarness {
     /// let outputs = harness.recv_output("out");
     /// ```
     pub fn run_to_completion(&mut self) -> Vec<Event> {
-        // Inject Stop so the event stream always terminates.
-        self.send_stop();
+        // Only inject Stop if the node hasn't been created yet — after init,
+        // buffered events can never reach the node (TestingInput is consumed
+        // atomically).  If the node is already initialized, just drain the
+        // existing stream.
+        let already_init = self.node.is_some();
+        if !already_init {
+            self.send_stop();
+        }
         self.ensure_init();
 
         let stream = self
@@ -321,8 +329,16 @@ impl NodeHarness {
     /// Consumes all buffered events and feeds them as
     /// [`TestingInput::Input`] so that the daemon thread processes them
     /// without ever blocking on a live input channel.
+    ///
+    /// If the node is already initialized, any buffered events are
+    /// silently cleared — they can never be delivered because
+    /// `TestingInput` is consumed atomically at init time.
     fn ensure_init(&mut self) {
         if self.node.is_some() {
+            // Node already initialized — buffered events can never reach it.
+            // Clear to avoid silently accumulating dead events that mislead
+            // callers into thinking they were delivered.
+            self.pending_events.clear();
             return;
         }
 
