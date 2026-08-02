@@ -79,6 +79,7 @@ pub struct NodeHarness {
     pending_events: Vec<TimedIncomingEvent>,
     /// Output channel sender.  Created eagerly in [`new`](Self::new) so
     /// `recv_output` works before init; consumed by `ensure_init`.
+    /// TODO: switch to tokio::sync::mpsc::Sender once upstream PR (a) merges.
     output_tx: Option<flume::Sender<serde_json::Map<String, serde_json::Value>>>,
     /// Receiver for outputs captured via [`TestingOutput::ToChannel`].
     output_rx: flume::Receiver<serde_json::Map<String, serde_json::Value>>,
@@ -108,7 +109,8 @@ impl NodeHarness {
     pub fn new() -> Result<Self, NodeError> {
         // Unbounded flume channel for output capture.
         // Upstream `TestingOutput::ToChannel` uses `flume::Sender` (the
-        // tokio-mpsc migration is pending in a separate upstream PR).
+        // tokio-mpsc migration is pending in upstream PR (a) — mentor
+        // Week 7 Discussion #28).
         let (output_tx, output_rx) = flume::unbounded();
 
         Ok(Self {
