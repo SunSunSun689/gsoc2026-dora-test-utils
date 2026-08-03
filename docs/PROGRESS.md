@@ -165,6 +165,18 @@ Code review of the Week 10 ReplaySession implementation found 15 issues.
 - `cargo test --test e2e_replay -- --test-threads=1` ✅ (11/11 pass)
 - `cargo test --test smoke -- --test-threads=1` ✅ (3/3 pass)
 
+## Week 10 后半 (2026-08-03): Weekly Sync discussion posts
+
+### Changes
+
+- **`docs/discussions/weekly-sync-posts.md`**: 4 weekly sync discussion posts for GitHub Discussions (Week 8/9/10/12), covering all work since mid-July
+
+### Verification
+
+- Posts are ready to copy-paste to GitHub Discussions, Category: `Weekly Sync`
+
+---
+
 ## Week 12 (2026-08-02): Demo script, README, edge-case tests
 
 ### Changes
