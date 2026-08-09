@@ -19,25 +19,19 @@ serde = { version = "1", features = ["derive"] }
 
 # DORA node API — the primary integration surface.
 #
-# Pinned to commit 45436aad by mentor decision (2026-06-01 Weekly Sync,
-# Discussion #17).  Uses git dependency (not vendored path).
-#
-# Upstream PR (a) pending: TestingOutput::ToChannel flume->tokio::sync::mpsc
-# migration (mentor Week 7 Discussion #28, "Start here").  Code is ready in
-# the local dora/ clone.  Once merged, update the rev and switch harness.rs
-# from flume to tokio::sync::mpsc.
-dora-node-api = { git = "https://github.com/dora-rs/dora.git", rev = "45436aad124fe46463d0b0411e3922dae8ee9ebd" }
+# Pinned to commit 1fba721 (2026-08-04) which includes the
+# TestingOutput::ToChannel flume→tokio::sync::mpsc migration.
+# See docs/PROGRESS.md Week 11 for details.
+dora-node-api = { git = "https://github.com/dora-rs/dora.git", rev = "1fba7214b79d8488229f6cc2027b9760dec4d6df" }
 
 # Arrow: must match the version used by the pinned DORA commit.
-# 45436aad uses arrow 58; do NOT bump unless the DORA pin changes.
-arrow = "58"
-arrow-json = "58"
-
-# Flume: required while upstream 45436aad uses flume::Sender for
-# TestingOutput::ToChannel.  Remove once upstream PR (a) is merged.
-flume = "0.10"
+# 1fba721 uses arrow 59; do NOT bump unless the DORA pin changes.
+arrow = "59"
+arrow-json = "59"
 
 # Tokio: async runtime used by DORA and our harness.
+# The unbounded_channel re-export from dora_node_api::integration_testing
+# obsoletes flume; no longer a dependency.
 tokio = { version = "1", features = ["sync", "macros", "rt"] }
 
 # serde_json: DORA outputs are serialized as JSON maps in integration

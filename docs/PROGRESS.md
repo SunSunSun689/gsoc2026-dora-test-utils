@@ -2,10 +2,11 @@
 
 ## DORA Version
 
-**Pinned**: `45436aad124fe46463d0b0411e3922dae8ee9ebd`
-**Confirmed**: 2026-06-01 Weekly Sync (Discussion #17), mentor ZhangHanDong
-**Reason**: Stable baseline for all development; predates v1.0.0-rc.1
-**Dependency**: `dora-node-api = { git = "...", rev = "45436aad..." }` (git dep, no vendored clone)
+**Pinned**: `1fba7214b79d8488229f6cc2027b9760dec4d6df` (was `45436aad`)
+**Updated**: 2026-08-09 — flume→tokio migration merged upstream; no upstream PR needed
+**Confirmed**: 2026-06-01 Weekly Sync (Discussion #17), mentor ZhangHanDong (original `45436aad`)
+**Reason**: `1fba721` is the commit that migrated `TestingOutput::ToChannel` from flume to tokio mpsc
+**Dependency**: `dora-node-api = { git = "...", rev = "1fba721..." }` (git dep, no vendored clone)
 **Upstream tracking**: [dora-rs/dora#2855](https://github.com/dora-rs/dora/issues/2855)
 
 > On 2026-07-27 we evaluated upgrading to v1.0.0-rc.4 and latest main.
@@ -201,13 +202,50 @@ Code review of the Week 10 ReplaySession implementation found 15 issues.
 - `cargo test --lib` ✅ (80/80 pass)
 - `cargo test --test e2e` ✅ (5/5 pass)
 
-## Remaining Plan (Adjusted 2026-07-27)
+## Week 11 (2026-08-09): Upstream discovery — flume→tokio already migrated
+
+### Finding
+
+Upstream dora-rs/dora **main** has already migrated `TestingOutput::ToChannel`
+from `flume::Sender` to `tokio::sync::mpsc::UnboundedSender`.  Verified by
+reading `apis/rust/node/src/integration_testing.rs` on dora-rs/dora main:
+
+- Line 154-155: `pub use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};`
+- `TestingOutput::ToChannel(UnboundedSender<OutputJson>)` — was `flume::Sender`
+- `drain_outputs(rx: &mut UnboundedReceiver<OutputJson>)` — was `flume::Receiver`
+
+### Upgrade executed
+
+| File | Change |
+|------|--------|
+| `Cargo.toml` | DORA rev: `45436aad` → `1fba721`; arrow: 58 → 59; removed `flume = "0.10"` |
+| `src/harness.rs` | `flume::unbounded()` → `unbounded_channel()`; types updated to `UnboundedSender`/`UnboundedReceiver` |
+| `src/lib.rs` | Updated doc comment about output channel |
+
+### Verification
+
+- `cargo check` ✅
+- `cargo fmt --check` ✅
+- `cargo clippy --lib` ✅ (zero warnings)
+- `cargo test --lib` ✅ (80/80 pass)
+- `cargo test --test e2e -- --test-threads=1` ✅ (5/5 pass)
+- `cargo test --test e2e_record -- --test-threads=1` ✅ (4/4 pass)
+- `cargo test --test e2e_replay -- --test-threads=1` ✅ (11/11 pass)
+- `cargo test --test smoke -- --test-threads=1` ✅ (3/3 pass)
+
+### Post-upgrade cleanups (no longer needed)
+
+- ~~Upstream PR (a): ToChannel flume→tokio~~ — upstream already did it
+- ~~`flume = "0.10"` dependency~~ — removed
+- ~~`harness.rs` TODO comment~~ — resolved
+
+## Remaining Plan (Adjusted 2026-08-09)
 
 | Week | Dates (China, Mon–Sun) | Deliverable |
 |------|------|------|
 | 9 后半 | 7/22–7/27 | `RecordSession::attach()` + `run()` + `save()` + 4 tests |
 | 10 | 7/28–8/3 | `ReplaySession::load()` + `run()` + `assert_no_regression()` + diff + 5-8 tests |
-| 11 | 8/4–8/10 | Upstream PR (a): `ToChannel` flume→tokio + regression test examples + integration |
+| 11 | 8/4–8/10 | ~~Upstream PR (a)~~ → Update DORA rev to post-migration commit + switch harness to tokio mpsc |
 | 12 | 8/11–8/17 | Debug + edge cases + docs polish |
 | 13 | 8/18–8/24 | Demo prep + final submission (Coding Phase 2 deadline) |
 
@@ -299,6 +337,7 @@ Code review of the Week 10 ReplaySession implementation found 15 issues.
 
 ## Deferred / Post-Submission
 
+- ~~Upstream PR (a): `ToChannel` flume→tokio~~ — ✅ done (upstream `1fba721`, consumed 2026-08-09)
 - Upstream PR (b): `TestingInput::Channel` API proposal (follow-up)
 - Python bindings (stretch goal)
 - Investigate parallel NodeHarness deadlock root cause in DORA upstream

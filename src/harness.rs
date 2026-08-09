@@ -29,7 +29,7 @@
 //! │  send_data()     │ ──────▶ Vec ──────▶     │  (the thing      │
 //! │  send_stop()     │         (deferred)       │   under test)    │
 //! │  tick()          │ ◀─────────────────────── │                  │
-//! │  recv_output() ◀─│── flume (output) ───────│                  │
+//! │  recv_output() ◀─│── tokio mpsc (output) ───│                  │
 //! └──────────────────┘                         └──────────────────┘
 //! ```
 
@@ -37,8 +37,8 @@ use std::collections::HashMap;
 
 use dora_node_api::{
     integration_testing::{
-        integration_testing_format::TimedIncomingEvent, IntegrationTestInput, TestingInput,
-        TestingOptions, TestingOutput,
+        integration_testing_format::TimedIncomingEvent, unbounded_channel, IntegrationTestInput,
+        TestingInput, TestingOptions, TestingOutput, UnboundedReceiver, UnboundedSender,
     },
     DoraNode, Event, EventStream, NodeError,
 };
@@ -79,10 +79,9 @@ pub struct NodeHarness {
     pending_events: Vec<TimedIncomingEvent>,
     /// Output channel sender.  Created eagerly in [`new`](Self::new) so
     /// `recv_output` works before init; consumed by `ensure_init`.
-    /// TODO: switch to tokio::sync::mpsc::Sender once upstream PR (a) merges.
-    output_tx: Option<flume::Sender<serde_json::Map<String, serde_json::Value>>>,
+    output_tx: Option<UnboundedSender<serde_json::Map<String, serde_json::Value>>>,
     /// Receiver for outputs captured via [`TestingOutput::ToChannel`].
-    output_rx: flume::Receiver<serde_json::Map<String, serde_json::Value>>,
+    output_rx: UnboundedReceiver<serde_json::Map<String, serde_json::Value>>,
     /// Buffered outputs indexed by output ID (the `"id"` field in each
     /// JSON output map).
     output_buffers: HashMap<String, Vec<serde_json::Map<String, serde_json::Value>>>,
@@ -105,13 +104,12 @@ impl NodeHarness {
     /// # Errors
     ///
     /// Returns a [`NodeError`] if the output channel cannot be created.
-    /// (In practice this never fails for an unbounded flume channel.)
+    /// (In practice this never fails for an unbounded tokio mpsc channel.)
     pub fn new() -> Result<Self, NodeError> {
-        // Unbounded flume channel for output capture.
-        // Upstream `TestingOutput::ToChannel` uses `flume::Sender` (the
-        // tokio-mpsc migration is pending in upstream PR (a) — mentor
-        // Week 7 Discussion #28).
-        let (output_tx, output_rx) = flume::unbounded();
+        // Unbounded tokio mpsc channel for output capture.
+        // Uses the re-export from dora_node_api::integration_testing, matching
+        // the upstream TestingOutput::ToChannel(UnboundedSender<OutputJson>).
+        let (output_tx, output_rx) = unbounded_channel();
 
         Ok(Self {
             pending_events: Vec::new(),
@@ -371,7 +369,7 @@ impl NodeHarness {
         self.event_stream = Some(event_stream);
     }
 
-    /// Collect all pending outputs from the flume channel into
+    /// Collect all pending outputs from the tokio mpsc channel into
     /// `output_buffers`, indexed by the `"id"` field in each JSON map.
     fn collect_pending_outputs(&mut self) {
         while let Ok(output) = self.output_rx.try_recv() {
