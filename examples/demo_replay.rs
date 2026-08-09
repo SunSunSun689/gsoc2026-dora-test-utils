@@ -1,17 +1,18 @@
-//! dora-test-utils Demo — Record/Replay regression testing showcase.
+//! dora-test-utils Demo — Record/Replay regression testing with a real DORA example.
 //!
-//! Demonstrates the full RecordSession → ReplaySession workflow:
-//!   1. Record a baseline from an echo pipeline (source → echo → sink)
-//!   2. Replay → verify `is_clean() = true`
-//!   3. Mutate the source data (simulate a regression)
-//!   4. Replay → structured DiffReport with per-sink field-level diffs
+//! Records the DORA `rust-dataflow` example (rust-node → rust-status-node)
+//! using our `test-sink` in record mode, then replays to detect regressions.
 //!
 //! ## Usage
 //!
 //! ```bash
-//! cargo build --example demo_replay --bin test-source --bin test-sink --bin echo-node
-//! cargo run  --example demo_replay
-//! cargo run  --example demo_replay -- --dora ./dora/target/debug/dora
+//! # Build dora example packages + our binaries
+//! cargo build -p rust-dataflow-example-node -p rust-dataflow-example-status-node --manifest-path dora/Cargo.toml
+//! cargo build --example demo_replay --bin test-sink
+//!
+//! # Run the demo
+//! cargo run --example demo_replay
+//! cargo run --example demo_replay -- --dora ./dora/target/debug/dora
 //! ```
 
 use dora_test_utils::record::{RecordSession, ReplaySession};
@@ -54,28 +55,6 @@ fn parse_args() -> Args {
 
 // ── Helpers ────────────────────────────────────────────────
 
-/// Locate a binary compiled by cargo.  Prefers the `CARGO_BIN_EXE_<name>`
-/// env var (set by `cargo run --example` for sibling bins), falls back to
-/// `target/<profile>/<name>`.
-fn find_bin(name: &str) -> PathBuf {
-    let env_key = format!("CARGO_BIN_EXE_{}", name.to_uppercase().replace('-', "_"));
-    if let Ok(p) = std::env::var(&env_key) {
-        let path = PathBuf::from(p);
-        if path.exists() {
-            return path;
-        }
-    }
-    let target = std::env::var("CARGO_TARGET_DIR").unwrap_or_else(|_| "target".to_string());
-    let profile = if cfg!(debug_assertions) {
-        "debug"
-    } else {
-        "release"
-    };
-    Path::new(&target).join(profile).join(name)
-}
-
-/// Resolve the dora CLI binary.  Order: `--dora` flag → local dora build →
-/// `$PATH`.
 fn resolve_dora(args: &Args) -> Option<PathBuf> {
     if let Some(ref d) = args.dora {
         return if d.exists() { Some(d.clone()) } else { None };
@@ -86,7 +65,6 @@ fn resolve_dora(args: &Args) -> Option<PathBuf> {
             return Some(local);
         }
     }
-    // Fall back to PATH
     Command::new("dora")
         .arg("--version")
         .output()
@@ -95,15 +73,19 @@ fn resolve_dora(args: &Args) -> Option<PathBuf> {
         .map(|_| PathBuf::from("dora"))
 }
 
-/// Check that every required binary exists; print a build hint if not.
 fn check_bin(name: &str) -> PathBuf {
-    let path = find_bin(name);
+    let path = PathBuf::from("target/debug").join(name);
     if !path.exists() {
+        let release = PathBuf::from("target/release").join(name);
+        if release.exists() {
+            return release;
+        }
         eprintln!(
-            "ERROR: binary '{}' not found at {}\n\
-             Build it first:\n  cargo build --bin {}",
+            "ERROR: binary '{}' not found at {} or {}\n\
+             Build: cargo build --bin {}",
             name,
             path.display(),
+            release.display(),
             name,
         );
         std::process::exit(1);
@@ -135,8 +117,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // ── Preflight ──────────────────────────────────────
     section("dora-test-utils — Record/Replay Demo");
-    println!("  {}", env!("CARGO_PKG_NAME"));
-    println!("  version: {}", env!("CARGO_PKG_VERSION"));
+    println!("  Uses DORA's rust-dataflow example (unmodified)");
+    println!("  rust-node → rust-status-node → test-sink (record)");
     println!();
 
     let _dora = match resolve_dora(&args) {
@@ -147,77 +129,32 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         None => {
             eprintln!(
                 "SKIP: dora CLI not found.\n\
-                 Build it with:\n  PYO3_NO_PYTHON=1 cargo build --bin dora \\\n    \
+                 Build: PYO3_NO_PYTHON=1 cargo build --bin dora \\\n    \
                  --manifest-path dora/binaries/cli/Cargo.toml\n\
-                 Or pass --dora <path>"
+                 Or: --dora <path>"
             );
             return Ok(());
         }
     };
 
-    let source_bin = check_bin("test-source");
-    let echo_bin = check_bin("echo-node");
-    let sink_bin = check_bin("test-sink");
-    ok("all binaries found");
+    let _sink_bin = check_bin("test-sink");
+    ok("binaries found");
 
     // ── Setup ──────────────────────────────────────────
     let tmp = tempfile::TempDir::new()?;
     #[allow(deprecated)]
-    let tmp_path = tmp.into_path(); // keep dir for manual inspection
-    let source_file = tmp_path.join("source.json");
+    let tmp_path = tmp.into_path();
     let sink_output = tmp_path.join("sink_output.json");
     let baseline_path = tmp_path.join("baseline.json");
 
-    let yaml_path = match args.dataflow {
-        Some(ref p) => p.clone(),
-        None => {
-            let yaml = format!(
-                r#"nodes:
-  - id: test-source
-    path: {}
-    args: "--output-id data --data-file {}"
-    outputs:
-      - data
-  - id: echo-node
-    path: {}
-    inputs:
-      data: test-source/data
-    outputs:
-      - data
-  - id: test-sink
-    path: {}
-    inputs:
-      data: echo-node/data
-    args: "--output-file {} --record-mode"
-"#,
-                source_bin.display(),
-                source_file.display(),
-                echo_bin.display(),
-                sink_bin.display(),
-                sink_output.display(),
-            );
-            let p = tmp_path.join("echo.yml");
-            std::fs::write(&p, &yaml)?;
-            p
-        }
-    };
+    let yaml_path = args.dataflow.unwrap_or_else(|| PathBuf::from("demo/rust-dataflow.yml"));
+    let mutated_yaml = PathBuf::from("demo/rust-dataflow-mutated.yml");
 
     // ── Step 1: Record baseline ────────────────────────
     section("Step 1 — Record baseline");
 
-    let baseline_data = serde_json::json!({
-        "data": [1, 2, 3, 4, 5],
-        "data_type": "Int32"
-    });
-    step(&format!(
-        "Writing source data: {}",
-        serde_json::to_string(&baseline_data)?
-    ));
-    std::fs::write(&source_file, serde_json::to_string_pretty(&baseline_data)?)?;
-    ok(&format!("source → {}", source_file.display()));
-
     step(&format!("Dataflow: {}", yaml_path.display()));
-    step("dora run --stop-after 10s ...");
+    step("Running dora run --stop-after 10s ...");
 
     let recording = RecordSession::attach(&yaml_path)?
         .record_sink("test-sink", &sink_output)
@@ -237,10 +174,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         recording.sinks.keys().collect::<Vec<_>>()
     );
 
-    // Show the recorded sink data
+    // Show sample of recorded data
     if let Some(sink_data) = recording.sinks.get("test-sink") {
         println!();
-        println!("  ── Recorded sink data ──");
+        println!("  ── Recorded sink data (sample) ──");
         if let Some(items) = sink_data.as_array() {
             for item in items.iter().take(3) {
                 let pretty = serde_json::to_string_pretty(item)?;
@@ -255,12 +192,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     // ── Step 2: Clean replay ───────────────────────────
-    section("Step 2 — Replay (clean — no regression)");
+    section("Step 2 — Replay (same YAML, no regression)");
 
-    step("Replaying against baseline with identical source data...");
-    // Re-write the same source data (Step 3 modifies it)
-    std::fs::write(&source_file, serde_json::to_string_pretty(&baseline_data)?)?;
-
+    step("Replaying with identical dataflow...");
     let result = ReplaySession::load(&baseline_path)?
         .replay_sink("test-sink", &sink_output)
         .with_timeout(Duration::from_secs(10))
@@ -270,21 +204,23 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     result.assert_no_regression();
     ok("assert_no_regression() — no panic");
 
-    // ── Step 3: Mutate source ──────────────────────────
-    section("Step 3 — Mutate source data (simulate regression)");
+    // ── Step 3: Mutated YAML ───────────────────────────
+    section("Step 3 — Switch to mutated dataflow (timer 100ms→50ms)");
 
-    let mutated = serde_json::json!({
-        "data": [1, 2, 99, 4, 5],    // ← third element changed: 3 → 99
-        "data_type": "Int32"
-    });
-    step("Changed: [1, 2, 3, 4, 5] → [1, 2, 99, 4, 5]");
-    std::fs::write(&source_file, serde_json::to_string_pretty(&mutated)?)?;
-    ok("mutated source written");
+    step(&format!("Dataflow: {}", mutated_yaml.display()));
+    step("rust-status-node now ticks every 50ms instead of 100ms");
+    step("→ produces more outputs in the same time window");
+    ok("mutated YAML ready");
 
     // ── Step 4: Regression detected ────────────────────
     section("Step 4 — Replay (regression detected)");
 
-    step("Replaying with mutated source data...");
+    step("Replaying with mutated dataflow...");
+    let _result = RecordSession::attach(&mutated_yaml)?
+        .record_sink("test-sink", &sink_output)
+        .with_timeout(Duration::from_secs(10))
+        .run()?;
+
     let result = ReplaySession::load(&baseline_path)?
         .replay_sink("test-sink", &sink_output)
         .with_timeout(Duration::from_secs(10))
@@ -294,10 +230,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     if clean {
         fail("BUG: is_clean() = true — regression was NOT detected!");
     }
-    ok(&format!(
-        "is_clean() = {}  ← correctly detected regression",
-        clean
-    ));
+    ok(&format!("is_clean() = {}  ← regression detected", clean));
 
     // Print the structured diff
     let diff = result.diff();
@@ -310,22 +243,23 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         result.assert_no_regression();
     }));
     match panic_result {
-        Err(_) => ok("assert_no_regression() panicked — correct behavior"),
+        Err(_) => ok("assert_no_regression() panicked — correct"),
         Ok(()) => fail("BUG: assert_no_regression() did NOT panic on regression!"),
     }
 
     // ── Summary ────────────────────────────────────────
     section("Summary");
-    println!(
-        "  ✅ Record baseline        — {} bytes",
-        baseline_path.metadata()?.len()
-    );
-    println!("  ✅ Replay (clean)         — is_clean() = true");
-    println!("  ✅ Replay (regression)    — is_clean() = false, DiffReport generated");
-    println!("  ✅ assert_no_regression() — panics on regression, no-op on clean");
+    println!("  ✅ Record baseline    — {} bytes", baseline_path.metadata()?.len());
+    println!("  ✅ Replay (clean)     — is_clean() = true");
+    println!("  ✅ Replay (regression)— is_clean() = false, DiffReport generated");
+    println!("  ✅ assert_no_regression() — panics on regression");
     println!();
     println!("  Working directory: {}", tmp_path.display());
-    println!("  (kept for inspection — delete manually when done)");
+    println!("  How this helps the DORA community:");
+    println!("    • rust-node and rust-status-node are UNMODIFIED dora examples");
+    println!("    • Only added: test-sink in record mode (1 YAML entry)");
+    println!("    • Any existing dora dataflow gets regression testing by adding");
+    println!("      1 sink node — no code changes to your existing nodes");
 
     Ok(())
 }
