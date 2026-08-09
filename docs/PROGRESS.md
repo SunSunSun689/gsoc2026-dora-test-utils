@@ -390,8 +390,8 @@ Week 13 (8/18–8/24) is the final coding phase week — Coding Phase 2 ends
 
 - **`docs/FINAL-REPORT.md`**: GSoC 2026 final report — project summary, 109-test
   coverage contract, API stability table, deferred items (296 lines)
-- **`scripts/demo-final.sh`**: final submission demo script — build + 3-pipeline
-  demo + full test suite (150 lines)
+- **`scripts/demo-final.sh`**: final submission demo script — build + Record/Replay
+  regression demo + full test suite (163 lines)
 
 ### Commits
 
@@ -399,6 +399,7 @@ Week 13 (8/18–8/24) is the final coding phase week — Coding Phase 2 ends
 |--------|-------------|
 | `7a0201a` | docs: add GSoC 2026 final report |
 | `5a82d31` | feat: add final submission demo script |
+| `76d5173` | fix(ci): update dora clone pin 45436aad → 1fba721 |
 
 ### Test counts
 
