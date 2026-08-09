@@ -103,25 +103,14 @@ result.assert_no_regression();  // panic with formatted diff
 
 ## 4. Upstream PR (a)：flume→tokio mpsc
 
-### 状态
+### 状态（2026-08-09 更新）
 
-代码已完成，已推送到 `SunSunSun689/dora:testing-output-tokio-mpsc`。
+✅ **已完成** — 上游 dora-rs/dora 于 2026-08-04 自行合并了此迁移（commit `1fba721`）。
+我们 Week 11 已将 DORA dep 从 `45436aad` 升级到 `1fba721`，移除 `flume = "0.10"`，
+`harness.rs` 切换到 `unbounded_channel()`。
 
-### 改动（dora-rs/dora）
-
-| 文件 | 改动 |
-|------|------|
-| `apis/rust/node/src/integration_testing.rs` | `TestingOutput::ToChannel(flume::Sender)` → `tokio::sync::mpsc::Sender`；新增 `TestingInput::Channel` 变体 |
-| `apis/rust/node/src/daemon_connection/node_integration_testing.rs` | 新增 `EventSource` 枚举（Vec + Channel）；`OutputWriter::Channel` 切到 tokio mpsc + `blocking_send`；`check_poisoned` 提取为独立方法 |
-| `apis/rust/node/src/node/mod.rs` | 内部测试代码适配 |
-
-### 相关 Issue
-
-已创建 tracking issue：**[dora-rs/dora#2956](https://github.com/dora-rs/dora/issues/2956)** — TestingOutput::ToChannel still uses flume after EventStream migration (#1603)
-
-### 待办
-
-PR 尚未正式提交（代码已就绪），等待 mentor 确认时机。
+PR 文件：`testing-output-tokio-mpsc` 分支中的 `TestingInput::Channel` 部分作为
+**Upstream PR (b)** 延后至 post-submission。
 
 ---
 
@@ -153,5 +142,5 @@ PR 尚未正式提交（代码已就绪），等待 mentor 确认时机。
 
 ## 7. 待讨论问题
 
-1. **Upstream PR (a) 时机**：代码已就绪，现在提交还是等 Week 13 final submission 后？
+1. ~~Upstream PR (a) 时机~~ → ✅ 上游已自行完成（2026-08-04），我们 Week 11 已消费
 2. **Weekly Sync Discussions**：Week 8/9/10/12 的讨论帖尚未发布，本周补上

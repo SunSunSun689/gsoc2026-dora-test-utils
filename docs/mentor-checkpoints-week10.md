@@ -83,12 +83,17 @@ result.assert_no_regression();   // panic with diff
 
 ### Q2: DORA version bump
 
-当前 pin 在 `45436aad`（2026-06-01 确认）。我们评估过升级到 `v1.0.0-rc.4`：
-- ✅ 代码兼容（patch clean apply）
-- ⚠️ arrow 58→59 需改 Cargo.toml
-- ⚠️ rc.4 仍有 daemon thread 死锁问题（不是升级能解决的）
+当前 **已升级到** `1fba721`（2026-08-09，Week 11）。`TestingOutput::ToChannel` 的
+flume→tokio mpsc 迁移已由上游完成，我们直接消费。详见 `docs/PROGRESS.md` Week 11。
+arrow 已从 58 升级到 59（匹配新的 DORA rev）。
 
-**问题**：是否需要升级？还是保持 `45436aad` 直到 final submission？
+**原始内容**（已过时）：
+> 当前 pin 在 `45436aad`（2026-06-01 确认）。我们评估过升级到 `v1.0.0-rc.4`：
+> - ✅ 代码兼容（patch clean apply）
+> - ⚠️ arrow 58→59 需改 Cargo.toml
+> - ⚠️ rc.4 仍有 daemon thread 死锁问题（不是升级能解决的）
+> 
+> **问题**：是否需要升级？还是保持 `45436aad` 直到 final submission？
 
 ### Q3: RecordSession/ReplaySession API 反馈
 

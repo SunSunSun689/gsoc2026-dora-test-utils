@@ -1,5 +1,12 @@
 # CI Deadlock Fix: flume 0.10 Spinlock on Low-CPU Runners
 
+> **Resolution (2026-08-09)**: 上游 dora-rs/dora 已将 `TestingOutput::ToChannel` 从
+> flume 迁移到 tokio mpsc（commit `1fba721`，2026-08-04）。Week 11 我们升级了
+> DORA 依赖，移除了 `flume = "0.10"`，et e2e/smoke 测试不再需要 `--test-threads=1`。
+> 详见 `docs/PROGRESS.md` Week 11。
+>
+> 以下文档保留作为历史参考。
+
 ## Problem
 
 PR #33 的 `cargo test` job 在 GitHub Actions (2 vCPU) 上**永久死锁**，跑了 6 小时后被 kill。

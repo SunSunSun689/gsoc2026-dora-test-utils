@@ -130,7 +130,7 @@ cargo build --bin test-source --bin test-sink --bin echo-node --bin classifier-n
 ### 跑测试
 
 ```bash
-# 库单元测试（52 个）
+# 库单元测试（80 个）
 cargo test --lib
 
 # 端到端测试（5 个）
@@ -199,27 +199,27 @@ scripts/            # Demo 脚本
 | `ReplaySession` / `ReplayResult` | **Experimental** | 重放比对，检测回归 |
 | `DiffReport` / `SinkDiff` / `FieldDiff` | **Experimental** | 结构化差异报告 |
 
-## 测试统计（Week 10）
+## 测试统计（Week 11）
 
 | 类别 | 数量 | 位置 |
 |------|------|------|
-| 库单元测试 | 52 | `src/*.rs` |
+| 库单元测试 | 80 | `src/*.rs` |
 | 端到端测试 (e2e) | 5 | `tests/e2e.rs` |
 | Record e2e (e2e_record) | 4 | `tests/e2e_record.rs` |
 | Replay e2e (e2e_replay) | 11 | `tests/e2e_replay.rs` |
 | 集成测试 | 6 | `tests/integration.rs` |
 | 冒烟测试 | 3 | `tests/smoke.rs` |
-| **总计** | **81** | |
+| **总计** | **109** | |
 
 ## CI
 
-6 个 CI jobs，全绿：
+5 个 CI jobs：
 
 - **check** — `cargo check`
-- **test** — `cargo test --lib` + `cargo test --test e2e` + `cargo test --test smoke`
+- **test** — `cargo test --lib` + e2e + smoke + integration + e2e_record + e2e_replay
 - **clippy** — `cargo clippy -- -D warnings`
 - **fmt** — `cargo fmt --check`
-- **integration-test** — 编译 dora CLI + test 二进制 + 集成测试 + e2e_record + e2e_replay
+- **integration-test** — 编译 dora CLI + test 二进制 + 集成测试 + record/replay e2e
 
 GitHub Actions 配置在 `.github/workflows/ci.yml`。
 
@@ -235,8 +235,8 @@ GitHub Actions 配置在 `.github/workflows/ci.yml`。
 | 8 | 多输出 + classifier + 3 条流水线 | ✅ |
 | 9 | flume→tokio mpsc + RecordSession | ✅ |
 | 10 | ReplaySession + code review 修复 | ✅ |
-| 11 | Upstream PR (a) 代码准备 | ✅ |
-| 12 | Demo + 边界测试 + docs polish | 🚧 |
+| 11 | DORA upgrade (45436aad→1fba721) + flume removed + integration test fix | ✅ |
+| 12 | Docs polish + demo refinement | 🚧 |
 | 13 | Final submission | ⏳ |
 
 详见 [`docs/PROGRESS.md`](docs/PROGRESS.md)。

@@ -322,7 +322,7 @@ Proposal 里写了 350h Extended 路径。**请 mentor 确认走哪条路。**
 | 2 | README + API docs + rustdoc | ✅ done | 必须 |
 | 3 | CI (6 jobs 全绿) | ✅ done | 必须 |
 | 4 | Final demo 脚本 | ⚠️ 需整合（现有 3 个分散脚本） | 必须？ |
-| 5 | Upstream PR (a): flume→tokio mpsc | 🔔 代码就绪，未提交 PR | 必须？ |
+| 5 | Upstream PR (a): flume→tokio mpsc | ✅ 上游已自行完成（2026-08-04），Week 11 已消费 | 必须 |
 | 6 | Final report (GSoC 格式) | ❌ 未开始 | 必须 |
 | 7 | 4 个 deferred code review issues | ⚠️ 已文档化 | 建议？ |
 | 8 | Upstream PR (b): Channel API | ❌ 未开始 | 延后 |
@@ -331,9 +331,8 @@ Proposal 里写了 350h Extended 路径。**请 mentor 确认走哪条路。**
 
 #### Q3: Upstream PR (a) 是否纳入 final submission？
 
-- 代码 + tracking issue ([dora-rs/dora#2956](https://github.com/dora-rs/dora/issues/2956)) 已完成
-- 如果属于 submission → 本周立刻提交 PR
-- 如果属于 post-submission → 记录到 deferred 列表
+✅ **已解决（2026-08-09）** — 上游 dora-rs/dora 自行合并了此迁移（commit `1fba721`），
+无需我们提交 PR。Week 11 已将 DORA dep 升级并移除 flume。
 
 #### Q4: Final report 格式要求？
 
@@ -351,7 +350,7 @@ GSoC 要求提交 final report。需要确认：
 
 ### 下周计划
 
-- Week 11：Upstream PR (a) 提交（等待 mentor 绿灯）
+- Week 11：~~Upstream PR (a) 提交~~ → ✅ 上游已自行完成，DORA dep 升级 + flume 移除
 - Week 12（提前）：demo 脚本、README 更新、边缘测试
 
 ---
@@ -440,7 +439,7 @@ GSoC 要求提交 final report。需要确认：
 
 ### 下周计划
 
-- Week 11（剩余）：提交 Upstream PR (a)，等待 review
+- Week 11（剩余）：~~提交 Upstream PR (a)~~ → ✅ 已完成（上游自行合并，Week 11 消费）
 - Week 13：Demo 准备 + Final Submission
 
 ---

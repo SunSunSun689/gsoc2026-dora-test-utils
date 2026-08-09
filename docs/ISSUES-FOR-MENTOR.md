@@ -7,7 +7,10 @@ Issues to discuss with mentor (bobdingAI) at the next weekly sync.
 ## Issue 1: flume 0.10 spinlock causes permanent deadlock on 2-vCPU CI runners
 
 **Severity**: 🔴 Critical  
-**Status**: Workaround in place, needs upstream fix  
+**Status**: ✅ **Resolved (2026-08-09)** — DORA dep upgraded to `1fba721`, which migrated
+`TestingOutput::ToChannel` from flume to tokio mpsc upstream.  `flume = "0.10"`
+removed from our `Cargo.toml`, `harness.rs` now uses `unbounded_channel()`.
+See Week 11 in `docs/PROGRESS.md`.  
 **Labels**: `bug`, `ci`, `upstream`
 
 ### Symptoms
@@ -62,8 +65,10 @@ The workaround is functional but brittle: harness/e2e test failures on CI are si
 ## Issue 2: Integration tests silently pass (green) when dora CLI is not on PATH
 
 **Severity**: 🟡 Medium  
-**Status**: Open  
-**Labels**: `bug`, `testing`, `dx`
+**Status**: ✅ **Fixed (2026-08-09)** — replaced `dora_available()` with `require_dora()`
+which panics in CI (`CI=true`) and prints a visible ⚠️ warning locally.
+See `tests/integration.rs` and Week 11 in `docs/PROGRESS.md`.
+**Labels**: `bug`, `testing`, `dx`, `fixed`
 
 ### Symptoms
 
@@ -153,10 +158,10 @@ Restored `--inline-data` as an alternative to `--data-file` in the backward-comp
 
 | # | Issue | Severity | Status |
 |---|-------|----------|--------|
-| 1 | flume 0.10 spinlock CI deadlock | 🔴 Critical | 🔔 **Needs mentor decision** — upstream PR? |
-| 2 | Integration tests silently skip | 🟡 Medium | Open — mentor input wanted |
+| 1 | flume 0.10 spinlock CI deadlock | 🔴 Critical | ✅ Resolved — upstream already migrated (2026-08-09) |
+| 2 | Integration tests silently skip | 🟡 Medium | ✅ Fixed — `require_dora()` panics in CI (2026-08-09) |
 | 3 | Multiple DoraNode per output | 🔴 Critical (was) | ✅ Fixed |
 | 4 | Binary naming inconsistency | 🟡 Medium | ✅ Fixed |
 | 5 | Missing --inline-data | 🟡 Medium | ✅ Fixed |
 
-**🔔 Decision needed (Issue 1)**: Should we file a PR against `dora-rs/dora` to migrate `TestingInput::Channel` from flume to `tokio::sync::mpsc`? Or is there a planned flume 0.11 migration that would address this? If approved, this can be scoped as a Week 9–10 task.
+All 5 issues resolved. 🎉
