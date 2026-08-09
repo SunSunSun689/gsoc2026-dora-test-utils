@@ -404,6 +404,8 @@ Demo 从 trivial echo pipeline 升级为 DORA 官方 `rust-dataflow` example：
 - 只加一个 test-sink 节点（1 行 YAML）= 回归测试能力
 - 回归触发：timer 100ms→50ms，输出频率翻倍 → DiffReport 检测到 count 差异
 
+- **`docs/WEEKLY_REPORT-week13.md`**: mentor 周报 — Week 11–13 成果总结
+
 ### Commits
 
 | Commit | Description |
@@ -419,6 +421,7 @@ Demo 从 trivial echo pipeline 升级为 DORA 官方 `rust-dataflow` example：
 | `751b0a9` | feat(demo): use DORA rust-dataflow example for Record/Replay demo |
 | `ee01ca7` | fix(demo): build dora example packages in demo-final.sh |
 | `37007c5` | fix(demo): correct YAML paths for demo/ directory |
+| `96ff23e` | docs: update PROGRESS.md — Week 13 demo redesign + full commit log |
 
 ### Test counts
 
