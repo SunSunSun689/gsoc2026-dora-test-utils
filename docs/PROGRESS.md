@@ -293,7 +293,7 @@ Also updated `scripts/demo-week12.sh` for week11 branch.
 | 10 | 7/28–8/3 | `ReplaySession::load()` + `run()` + `assert_no_regression()` + diff + 5-8 tests |
 | 11 | 8/4–8/10 | ~~Upstream PR (a)~~ → Update DORA rev to post-migration commit + switch harness to tokio mpsc |
 | 12 | 8/11–8/17 | ~~Debug + edge cases + docs polish~~ → docs done (2026-08-09), edge cases done (Week 10) |
-| 13 | 8/18–8/24 | Demo prep + final submission (Coding Phase 2 deadline) |
+| 13 | 8/18–8/24 | ~~Demo prep + final submission~~ → ✅ 已提前完成 (2026-08-09) — report + demo + CI 全部就绪 |
 
 ## Week 9 后半 (2026-07-21): PR #35 merge conflicts + CI fix
 
@@ -384,7 +384,7 @@ Also updated `scripts/demo-week12.sh` for week11 branch.
 ## Week 13 (2026-08-09): Final submission
 
 Week 13 (8/18–8/24) is the final coding phase week — Coding Phase 2 ends
-2026-08-24 23:59 UTC. All final submission deliverables prepared:
+2026-08-24 23:59 UTC. All final submission deliverables prepared.
 
 ### Changes
 
@@ -392,6 +392,17 @@ Week 13 (8/18–8/24) is the final coding phase week — Coding Phase 2 ends
   coverage contract, API stability table, deferred items (296 lines)
 - **`scripts/demo-final.sh`**: final submission demo script — build + Record/Replay
   regression demo + full test suite (163 lines)
+- **`demo/rust-dataflow.yml`**: DORA 官方 rust-dataflow example + test-sink 录制
+- **`demo/rust-dataflow-mutated.yml`**: 同上，timer 100ms→50ms（触发回归）
+- **`examples/demo_replay.rs`**: 重写 — 使用静态 YAML 文件，不再动态生成
+- **`.github/workflows/ci.yml`**: dora clone pin 45436aad → 1fba721
+
+### Demo 设计
+
+Demo 从 trivial echo pipeline 升级为 DORA 官方 `rust-dataflow` example：
+- rust-node 和 rust-status-node **一行不改**（证明工具的非侵入性）
+- 只加一个 test-sink 节点（1 行 YAML）= 回归测试能力
+- 回归触发：timer 100ms→50ms，输出频率翻倍 → DiffReport 检测到 count 差异
 
 ### Commits
 
@@ -400,6 +411,14 @@ Week 13 (8/18–8/24) is the final coding phase week — Coding Phase 2 ends
 | `7a0201a` | docs: add GSoC 2026 final report |
 | `5a82d31` | feat: add final submission demo script |
 | `76d5173` | fix(ci): update dora clone pin 45436aad → 1fba721 |
+| `53f0c1b` | fix(demo): add dora clone prerequisite check and cd guard |
+| `6881771` | docs: update FINAL-REPORT.md commit count |
+| `b7b09d5` | docs: fix PROGRESS.md Week 13 — add missing commit, fix demo description |
+| `e20f472` | feat(demo): add rust-dataflow YAML with test-sink for recording |
+| `d0ab9f8` | feat(demo): add mutated rust-dataflow YAML (timer 100→50ms) |
+| `751b0a9` | feat(demo): use DORA rust-dataflow example for Record/Replay demo |
+| `ee01ca7` | fix(demo): build dora example packages in demo-final.sh |
+| `37007c5` | fix(demo): correct YAML paths for demo/ directory |
 
 ### Test counts
 
