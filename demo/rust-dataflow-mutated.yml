@@ -9,8 +9,8 @@
 #   dora run demo/rust-dataflow-mutated.yml --stop-after 10s
 nodes:
   - id: rust-node
-    build: cargo build -p rust-dataflow-example-node
-    path: ../../target/debug/rust-dataflow-example-node
+    build: cargo build -p rust-dataflow-example-node --manifest-path ../dora/Cargo.toml
+    path: ../dora/target/debug/rust-dataflow-example-node
     inputs:
       tick: dora/timer/millis/10
     outputs:
@@ -19,8 +19,8 @@ nodes:
       random: std/core/v1/UInt64
 
   - id: rust-status-node
-    build: cargo build -p rust-dataflow-example-status-node
-    path: ../../target/debug/rust-dataflow-example-status-node
+    build: cargo build -p rust-dataflow-example-status-node --manifest-path ../dora/Cargo.toml
+    path: ../dora/target/debug/rust-dataflow-example-status-node
     inputs:
       tick: dora/timer/millis/50
       random: rust-node/random
@@ -32,7 +32,7 @@ nodes:
       status: std/core/v1/String
 
   - id: test-sink
-    path: ./target/debug/test-sink
+    path: ../target/debug/test-sink
     inputs:
       status: rust-status-node/status
     args: "--output-file ./sink_output.json --record-mode"

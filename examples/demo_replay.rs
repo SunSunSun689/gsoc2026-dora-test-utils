@@ -144,7 +144,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let tmp = tempfile::TempDir::new()?;
     #[allow(deprecated)]
     let tmp_path = tmp.into_path();
-    let sink_output = tmp_path.join("sink_output.json");
+    let sink_output = PathBuf::from("demo/sink_output.json");
     let baseline_path = tmp_path.join("baseline.json");
 
     let yaml_path = args.dataflow.unwrap_or_else(|| PathBuf::from("demo/rust-dataflow.yml"));
