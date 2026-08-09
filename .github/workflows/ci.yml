@@ -62,7 +62,7 @@ jobs:
 
       # DORA CLI is needed for `dora run` in integration + record tests.
       # dora-node-api is pulled as a git dep (Cargo.toml) — no patch needed.
-      - run: git clone https://github.com/dora-rs/dora.git dora && git -C dora checkout 45436aad124fe46463d0b0411e3922dae8ee9ebd
+      - run: git clone https://github.com/dora-rs/dora.git dora && git -C dora checkout 1fba7214b79d8488229f6cc2027b9760dec4d6df
         working-directory: ${{ github.workspace }}
 
       # Cache dora build artifacts — keyed on dora source hash so the
