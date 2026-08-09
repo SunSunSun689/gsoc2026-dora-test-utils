@@ -12,6 +12,9 @@
 # ─────────────────────────────────────────────────────────────
 set -euo pipefail
 
+# Run from the repo root regardless of the calling directory
+cd "$(dirname "$0")/.."
+
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 CYAN='\033[0;36m'
@@ -38,6 +41,16 @@ banner "0. Check prerequisites"
 step "Check Rust toolchain..."
 cargo --version
 rustc --version
+
+step "Check dora source checkout..."
+if [ ! -f dora/binaries/cli/Cargo.toml ]; then
+    warn "dora source not found at dora/binaries/cli/Cargo.toml"
+    echo ""
+    echo "dora is required for the Record/Replay demo. Clone it and check out the pinned commit:"
+    echo "    git clone https://github.com/dora-rs/dora.git dora"
+    echo "    git -C dora checkout 1fba7214b79d8488229f6cc2027b9760dec4d6df"
+    exit 1
+fi
 
 # ─── 1. Build everything ─────────────────────────────────
 banner "1. Build all binaries"
