@@ -75,12 +75,21 @@ fi
 # ─── 2. Record/Replay demo ───────────────────────────────
 banner "2. Record/Replay regression testing demo"
 
+DORA_BIN="dora/target/debug/dora"
+if [ ! -f "$DORA_BIN" ]; then
+    DORA_BIN="dora/target/release/dora"
+fi
+
 DEMO="target/debug/examples/demo_replay"
 if [ -f "$DEMO" ]; then
     step "Running Record/Replay demo..."
     echo ""
     set +e
-    "$DEMO" 2>&1
+    if [ -f "$DORA_BIN" ]; then
+        "$DEMO" --dora "$DORA_BIN" 2>&1
+    else
+        "$DEMO" 2>&1
+    fi
     DEMO_EXIT=$?
     set -e
     echo ""
@@ -130,5 +139,5 @@ echo "  • ReplaySession (regression): structured DiffReport with MISMATCH"
 echo "  • DiffReport: Display format shows field-level differences"
 echo ""
 echo -e "${CYAN}Repo:${NC} https://github.com/SunSunSun689/gsoc2026-dora-test-utils"
-echo -e "${CYAN}Branch:${NC} week10"
-echo -e "${CYAN}Upstream PR:${NC} https://github.com/SunSunSun689/dora/tree/testing-output-tokio-mpsc"
+echo -e "${CYAN}Branch:${NC} week11"
+echo -e "${CYAN}DORA dep:${NC} 1fba721 (flume→tokio mpsc, arrow 59)"
