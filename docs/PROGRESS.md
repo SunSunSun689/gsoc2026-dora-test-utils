@@ -202,25 +202,45 @@ Code review of the Week 10 ReplaySession implementation found 15 issues.
 - `cargo test --lib` ✅ (80/80 pass)
 - `cargo test --test e2e` ✅ (5/5 pass)
 
-## Week 11 (2026-08-09): Upstream discovery — flume→tokio already migrated
+## Week 11 (2026-08-09): DORA upgrade + integration test fix + demo polish
 
-### Finding
+### 1. DORA dep upgrade — flume→tokio already migrated upstream
 
-Upstream dora-rs/dora **main** has already migrated `TestingOutput::ToChannel`
-from `flume::Sender` to `tokio::sync::mpsc::UnboundedSender`.  Verified by
-reading `apis/rust/node/src/integration_testing.rs` on dora-rs/dora main:
-
-- Line 154-155: `pub use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};`
-- `TestingOutput::ToChannel(UnboundedSender<OutputJson>)` — was `flume::Sender`
-- `drain_outputs(rx: &mut UnboundedReceiver<OutputJson>)` — was `flume::Receiver`
-
-### Upgrade executed
+Upstream dora-rs/dora **main** already migrated `TestingOutput::ToChannel`
+from `flume::Sender` to `tokio::sync::mpsc::UnboundedSender` (commit `1fba721`,
+2026-08-04).  Week 11's planned Upstream PR (a) was not needed.
 
 | File | Change |
 |------|--------|
 | `Cargo.toml` | DORA rev: `45436aad` → `1fba721`; arrow: 58 → 59; removed `flume = "0.10"` |
-| `src/harness.rs` | `flume::unbounded()` → `unbounded_channel()`; types updated to `UnboundedSender`/`UnboundedReceiver` |
+| `src/harness.rs` | `flume::unbounded()` → `unbounded_channel()`; types → `UnboundedSender`/`UnboundedReceiver` |
 | `src/lib.rs` | Updated doc comment about output channel |
+
+### 2. Fix: integration tests no longer silently pass (Issue #2)
+
+6 integration tests in `tests/integration.rs` silently returned green when
+`dora` CLI was missing.  Replaced `dora_available()` guard with `require_dora()`:
+panics in CI (`CI=true`), prints visible ⚠️ warning locally and skips.
+
+### 3. Demo polish
+
+Rewrote `examples/demo_replay.rs` for final submission quality:
+- `--dora` and `--dataflow` CLI flags
+- `CARGO_BIN_EXE_*` env var for bin discovery
+- Precondition checks with build hints
+- Recording metadata + sink data preview
+- `assert_no_regression()` panic verification
+- Structured 4-step output with ✅/❌ markers
+
+Also updated `scripts/demo-week12.sh` for week11 branch.
+
+### Commits
+
+| Commit | Description |
+|--------|-------------|
+| `169680e` | feat: upgrade DORA dep 45436aad → 1fba721, remove flume |
+| `c1897ee` | fix: integration tests no longer silently pass when dora CLI is missing |
+| `99d42ea` | docs(demo): enhance demo_replay — CLI args, structured output, metadata display |
 
 ### Verification
 
@@ -232,12 +252,14 @@ reading `apis/rust/node/src/integration_testing.rs` on dora-rs/dora main:
 - `cargo test --test e2e_record -- --test-threads=1` ✅ (4/4 pass)
 - `cargo test --test e2e_replay -- --test-threads=1` ✅ (11/11 pass)
 - `cargo test --test smoke -- --test-threads=1` ✅ (3/3 pass)
+- `cargo test --test integration -- --test-threads=1` ✅ (6/6 pass)
 
-### Post-upgrade cleanups (no longer needed)
+### Resolved
 
 - ~~Upstream PR (a): ToChannel flume→tokio~~ — upstream already did it
 - ~~`flume = "0.10"` dependency~~ — removed
 - ~~`harness.rs` TODO comment~~ — resolved
+- ~~Integration tests silent pass (Issue #2)~~ — CI panics, local warns
 
 ## Remaining Plan (Adjusted 2026-08-09)
 
