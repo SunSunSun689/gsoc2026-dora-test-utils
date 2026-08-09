@@ -1,0 +1,38 @@
+# dora-test-utils Record/Replay Demo -- MUTATED VARIANT
+# Same as rust-dataflow.yml, except rust-status-node's tick timer
+# is 50ms instead of 100ms (doubles output frequency to trigger
+# a regression in ReplaySession comparisons).
+# Uses DORA's official rust-dataflow example nodes (unmodified)
+# with our test-sink for recording outputs.
+#
+# Run via demo_replay.rs or manually:
+#   dora run demo/rust-dataflow-mutated.yml --stop-after 10s
+nodes:
+  - id: rust-node
+    build: cargo build -p rust-dataflow-example-node
+    path: ../../target/debug/rust-dataflow-example-node
+    inputs:
+      tick: dora/timer/millis/10
+    outputs:
+      - random
+    output_types:
+      random: std/core/v1/UInt64
+
+  - id: rust-status-node
+    build: cargo build -p rust-dataflow-example-status-node
+    path: ../../target/debug/rust-dataflow-example-status-node
+    inputs:
+      tick: dora/timer/millis/50
+      random: rust-node/random
+    input_types:
+      random: std/core/v1/UInt64
+    outputs:
+      - status
+    output_types:
+      status: std/core/v1/String
+
+  - id: test-sink
+    path: ./target/debug/test-sink
+    inputs:
+      status: rust-status-node/status
+    args: "--output-file ./sink_output.json --record-mode"
