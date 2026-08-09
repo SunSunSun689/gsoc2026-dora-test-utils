@@ -202,6 +202,30 @@ Code review of the Week 10 ReplaySession implementation found 15 issues.
 - `cargo test --lib` ✅ (80/80 pass)
 - `cargo test --test e2e` ✅ (5/5 pass)
 
+### Week 12 后半 (2026-08-09): Docs polish — reflect DORA upgrade
+
+Updated all docs to reflect Week 11 changes:
+
+| File | Changes |
+|------|---------|
+| `README.md` | Test counts 81→109, Week 11 status, CI description |
+| `docs/ISSUES-FOR-MENTOR.md` | Issue 1 (flume) → Resolved; Issue 2 (silent test) → Fixed; Summary table updated |
+| `docs/upstream-pr-plan.md` | PR (a) status banner — upstream already merged |
+| `docs/mentor-checkpoints-week10.md` | DORA version updated from `45436aad` to `1fba721` |
+| `docs/WEEKLY_REPORT-week10-12.md` | Q4: Upstream PR (a) resolved |
+| `docs/CI-DEADLOCK-FIX.md` | Resolution note at top |
+| `docs/discussions/weekly-sync-posts.md` | Q3 resolved, Upstream PR references updated |
+
+### Commits
+
+| Commit | Description |
+|--------|-------------|
+| `a63a38b` | docs: Week 12 — update all docs for DORA upgrade and resolved issues |
+
+### Verification
+
+- `cargo test --lib` ✅ (80/80 pass)
+
 ## Week 11 (2026-08-09): DORA upgrade + integration test fix + demo polish
 
 ### 1. DORA dep upgrade — flume→tokio already migrated upstream
@@ -268,7 +292,7 @@ Also updated `scripts/demo-week12.sh` for week11 branch.
 | 9 后半 | 7/22–7/27 | `RecordSession::attach()` + `run()` + `save()` + 4 tests |
 | 10 | 7/28–8/3 | `ReplaySession::load()` + `run()` + `assert_no_regression()` + diff + 5-8 tests |
 | 11 | 8/4–8/10 | ~~Upstream PR (a)~~ → Update DORA rev to post-migration commit + switch harness to tokio mpsc |
-| 12 | 8/11–8/17 | Debug + edge cases + docs polish |
+| 12 | 8/11–8/17 | ~~Debug + edge cases + docs polish~~ → docs done (2026-08-09), edge cases done (Week 10) |
 | 13 | 8/18–8/24 | Demo prep + final submission (Coding Phase 2 deadline) |
 
 ## Week 9 后半 (2026-07-21): PR #35 merge conflicts + CI fix
