@@ -25,7 +25,7 @@
 **Verdict: On schedule (Standard path, 2026-08-24).** TestSource/TestSink binaries were
 delivered in Week 5 (ahead of plan), Record/Replay — the proposal's extended scope — were
 delivered in Weeks 9–10, and Weeks 11–12 were spent on the DORA dependency upgrade,
-edge-case hardening, and docs/demo polish. 287 commits on the `week11` branch.
+edge-case hardening, and docs/demo polish. 291 commits on the `week11` branch.
 
 ---
 
@@ -154,7 +154,7 @@ Deferred items are documented with upgrade paths (see Section 6).
 
 | Metric | Value |
 |--------|-------|
-| Commits (`week11` branch) | 287 |
+| Commits (`week11` branch) | 291 |
 | Rust source files (src/ + bins) | 12 |
 | Library lines (src/, incl. bins) | ~4,190 |
 | Test lines (tests/) | ~1,550 |
