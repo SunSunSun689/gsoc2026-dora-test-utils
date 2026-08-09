@@ -381,6 +381,30 @@ Also updated `scripts/demo-week12.sh` for week11 branch.
 | `src/lib.rs` | pub mod record + re-exports |
 | `tests/e2e_record.rs` | NEW — 4 e2e tests |
 
+## Week 13 (2026-08-09): Final submission
+
+Week 13 (8/18–8/24) is the final coding phase week — Coding Phase 2 ends
+2026-08-24 23:59 UTC. All final submission deliverables prepared:
+
+### Changes
+
+- **`docs/FINAL-REPORT.md`**: GSoC 2026 final report — project summary, 109-test
+  coverage contract, API stability table, deferred items (296 lines)
+- **`scripts/demo-final.sh`**: final submission demo script — build + 3-pipeline
+  demo + full test suite (150 lines)
+
+### Commits
+
+| Commit | Description |
+|--------|-------------|
+| `7a0201a` | docs: add GSoC 2026 final report |
+| `5a82d31` | feat: add final submission demo script |
+
+### Test counts
+
+- Unchanged: **109 tests** across 6 categories (80 lib + 5 e2e + 4 e2e_record +
+  11 e2e_replay + 6 integration + 3 smoke) — same as Week 11 final counts
+
 ## Deferred / Post-Submission
 
 - ~~Upstream PR (a): `ToChannel` flume→tokio~~ — ✅ done (upstream `1fba721`, consumed 2026-08-09)
