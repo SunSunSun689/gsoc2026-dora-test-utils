@@ -58,11 +58,20 @@ banner "1. Build all binaries"
 BUILD_LOG=$(mktemp)
 trap "rm -f $BUILD_LOG" EXIT
 
-step "Build test-source, test-sink, echo-node, classifier-node..."
-if cargo build --bin test-source --bin test-sink --bin echo-node --bin classifier-node > "$BUILD_LOG" 2>&1; then
+step "Build test-source, test-sink, classifier-node..."
+if cargo build --bin test-source --bin test-sink --bin classifier-node > "$BUILD_LOG" 2>&1; then
     tail -1 "$BUILD_LOG"
 else
     warn "Build failed! Last 20 lines:"
+    tail -20 "$BUILD_LOG"
+    exit 1
+fi
+
+step "Build dora rust-dataflow example packages..."
+if cargo build -p rust-dataflow-example-node -p rust-dataflow-example-status-node --manifest-path dora/Cargo.toml > "$BUILD_LOG" 2>&1; then
+    tail -1 "$BUILD_LOG"
+else
+    warn "dora example build failed! Last 20 lines:"
     tail -20 "$BUILD_LOG"
     exit 1
 fi
@@ -152,7 +161,8 @@ cargo test --test smoke -- --test-threads=1
 banner "Demo Complete"
 
 echo -e "${GREEN}${BOLD}Summary:${NC}"
-echo "  • RecordSession: baseline captured with metadata"
+echo "  • RecordSession: baseline captured from DORA's rust-dataflow example with metadata"
+echo "  • Demo uses DORA's rust-dataflow example (unmodified nodes)"
 echo "  • ReplaySession (clean): assert_no_regression() passed"
 echo "  • ReplaySession (regression): structured DiffReport with MISMATCH"
 echo "  • DiffReport: Display format shows field-level differences"
