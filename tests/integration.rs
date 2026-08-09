@@ -25,6 +25,28 @@ fn dora_available() -> bool {
         .unwrap_or(false)
 }
 
+/// Require `dora` CLI on `PATH` before running an integration test.
+///
+/// In CI (`CI=true`), panics if unavailable — prevents silent pass.
+/// Locally, prints a warning and returns `false` so the caller can skip.
+fn require_dora() -> bool {
+    if dora_available() {
+        return true;
+    }
+    let in_ci = std::env::var("CI").is_ok();
+    if in_ci {
+        panic!(
+            "dora CLI not found on PATH — required by integration tests in CI.\n\
+             The CI workflow should install dora before running these tests."
+        );
+    }
+    eprintln!(
+        "⚠️  SKIP: dora CLI not found on PATH — integration tests will be skipped.\n\
+         Install dora or run `cargo test --lib` for unit tests only."
+    );
+    false
+}
+
 /// Locate a compiled binary under `target/<profile>/<name>`.
 fn bin_path(name: &str) -> PathBuf {
     let target_dir = std::env::var("CARGO_TARGET_DIR").unwrap_or_else(|_| "target".to_string());
@@ -216,8 +238,7 @@ fn run_echo_pipeline(
 #[test]
 #[serial]
 fn echo_pipeline_exact_match_int64() {
-    if !dora_available() {
-        eprintln!("SKIP: dora CLI not found on PATH");
+    if !require_dora() {
         return;
     }
     build_binaries();
@@ -247,8 +268,7 @@ fn echo_pipeline_exact_match_int64() {
 #[test]
 #[serial]
 fn echo_pipeline_semantic_int32_tolerates_int64() {
-    if !dora_available() {
-        eprintln!("SKIP: dora CLI not found on PATH");
+    if !require_dora() {
         return;
     }
     build_binaries();
@@ -278,8 +298,7 @@ fn echo_pipeline_semantic_int32_tolerates_int64() {
 #[test]
 #[serial]
 fn echo_pipeline_ten_elements() {
-    if !dora_available() {
-        eprintln!("SKIP: dora CLI not found on PATH");
+    if !require_dora() {
         return;
     }
     build_binaries();
@@ -306,8 +325,7 @@ fn echo_pipeline_ten_elements() {
 #[test]
 #[serial]
 fn echo_pipeline_string_data() {
-    if !dora_available() {
-        eprintln!("SKIP: dora CLI not found on PATH");
+    if !require_dora() {
         return;
     }
     build_binaries();
@@ -415,8 +433,7 @@ fn run_multi_echo_pipeline(
 #[test]
 #[serial]
 fn multi_echo_pipeline_two_outputs() {
-    if !dora_available() {
-        eprintln!("SKIP: dora CLI not found on PATH");
+    if !require_dora() {
         return;
     }
     build_binaries();
@@ -514,8 +531,7 @@ fn run_classifier_pipeline(
 #[test]
 #[serial]
 fn classifier_pipeline_basic() {
-    if !dora_available() {
-        eprintln!("SKIP: dora CLI not found on PATH");
+    if !require_dora() {
         return;
     }
     build_binaries();
