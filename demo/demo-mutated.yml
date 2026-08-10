@@ -1,0 +1,26 @@
+# dora-test-utils Record/Replay Demo — Mutated YAML (reference)
+#
+# NOTE: demo_replay.rs generates temp YAMLs with absolute paths at runtime.
+# This file is kept as human-readable reference.
+#
+# Same structure as demo-baseline.yml, but test-source reads mutated data
+# (4 elements instead of 3) — triggers regression in ReplaySession.
+nodes:
+  - id: test-source
+    path: <absolute>/target/debug/test-source
+    args: "--output-id data --data-file <absolute>/demo/demo-source-mutated.json"
+    outputs:
+      - data
+
+  - id: echo-node
+    path: <absolute>/target/debug/echo-node
+    inputs:
+      data: test-source/data
+    outputs:
+      - data
+
+  - id: test-sink
+    path: <absolute>/target/debug/test-sink
+    inputs:
+      data: echo-node/data
+    args: "--output-file <absolute>/sink_output.json --record-mode"

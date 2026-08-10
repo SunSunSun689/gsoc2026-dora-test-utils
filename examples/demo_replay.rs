@@ -1,14 +1,13 @@
-//! dora-test-utils Demo — Record/Replay regression testing with a real DORA example.
+//! dora-test-utils Demo — Record/Replay regression testing.
 //!
-//! Records the DORA `rust-dataflow` example (rust-node → rust-status-node)
-//! using our `test-sink` in record mode, then replays to detect regressions.
+//! Records a deterministic echo pipeline (test-source → echo-node → test-sink)
+//! in record mode, then replays to detect regressions when source data changes.
 //!
 //! ## Usage
 //!
 //! ```bash
-//! # Build dora example packages + our binaries
-//! cargo build -p rust-dataflow-example-node -p rust-dataflow-example-status-node --manifest-path dora/Cargo.toml
-//! cargo build --example demo_replay --bin test-sink
+//! # Build our binaries + echo-node
+//! cargo build --bin test-source --bin test-sink --bin echo-node --example demo_replay
 //!
 //! # Run the demo
 //! cargo run --example demo_replay
@@ -16,6 +15,7 @@
 //! ```
 
 use dora_test_utils::record::{RecordSession, ReplaySession};
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::Duration;
@@ -73,24 +73,29 @@ fn resolve_dora(args: &Args) -> Option<PathBuf> {
         .map(|_| PathBuf::from("dora"))
 }
 
+fn bin_path(name: &str) -> PathBuf {
+    let profile = if cfg!(debug_assertions) {
+        "debug"
+    } else {
+        "release"
+    };
+    let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+    cwd.join("target").join(profile).join(name)
+}
+
 fn check_bin(name: &str) -> PathBuf {
-    let path = PathBuf::from("target/debug").join(name);
-    if !path.exists() {
-        let release = PathBuf::from("target/release").join(name);
-        if release.exists() {
-            return release;
-        }
-        eprintln!(
-            "ERROR: binary '{}' not found at {} or {}\n\
-             Build: cargo build --bin {}",
-            name,
-            path.display(),
-            release.display(),
-            name,
-        );
-        std::process::exit(1);
+    let path = bin_path(name);
+    if path.exists() {
+        return path;
     }
-    path
+    eprintln!(
+        "ERROR: binary '{}' not found at {}\n\
+         Build: cargo build --bin {}",
+        name,
+        path.display(),
+        name,
+    );
+    std::process::exit(1);
 }
 
 fn section(title: &str) {
@@ -110,6 +115,54 @@ fn fail(msg: &str) -> ! {
     std::process::exit(1);
 }
 
+/// Generate a temp YAML for an echo pipeline with absolute paths.
+///
+/// This is necessary because dora spawns node processes from a different
+/// working directory, so all file paths in the YAML must be absolute.
+fn generate_yaml(
+    tmp: &Path,
+    name: &str,
+    source_file: &Path,
+) -> Result<PathBuf, Box<dyn std::error::Error>> {
+    let source_bin = check_bin("test-source");
+    let echo_bin = check_bin("echo-node");
+    let sink_bin = check_bin("test-sink");
+    let output_file = tmp.join("sink_output.json");
+
+    let yaml = format!(
+        r#"nodes:
+  - id: test-source
+    path: {source_bin}
+    args: "--output-id data --data-file {source_file}"
+    outputs:
+      - data
+
+  - id: echo-node
+    path: {echo_bin}
+    inputs:
+      data: test-source/data
+    outputs:
+      - data
+
+  - id: test-sink
+    path: {sink_bin}
+    inputs:
+      data: echo-node/data
+    args: "--output-file {output_file} --record-mode"
+"#,
+        source_bin = source_bin.display(),
+        source_file = source_file.display(),
+        echo_bin = echo_bin.display(),
+        sink_bin = sink_bin.display(),
+        output_file = output_file.display(),
+    );
+
+    let yaml_path = tmp.join(name);
+    let mut f = std::fs::File::create(&yaml_path)?;
+    f.write_all(yaml.as_bytes())?;
+    Ok(yaml_path)
+}
+
 // ── Main ───────────────────────────────────────────────────
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -117,8 +170,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // ── Preflight ──────────────────────────────────────
     section("dora-test-utils — Record/Replay Demo");
-    println!("  Uses DORA's rust-dataflow example (unmodified)");
-    println!("  rust-node → rust-status-node → test-sink (record)");
+    println!("  Deterministic echo pipeline (test-source → echo-node → test-sink)");
+    println!("  Regression trigger: extra data element in mutated source");
     println!();
 
     let _dora = match resolve_dora(&args) {
@@ -137,18 +190,33 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     };
 
-    let _sink_bin = check_bin("test-sink");
+    // Pre-flight: verify required binaries exist
+    let _ = check_bin("test-source");
+    let _ = check_bin("echo-node");
+    let _ = check_bin("test-sink");
     ok("binaries found");
 
     // ── Setup ──────────────────────────────────────────
     let tmp = tempfile::TempDir::new()?;
     #[allow(deprecated)]
     let tmp_path = tmp.into_path();
-    let sink_output = PathBuf::from("demo/sink_output.json");
     let baseline_path = tmp_path.join("baseline.json");
 
-    let yaml_path = args.dataflow.unwrap_or_else(|| PathBuf::from("demo/rust-dataflow.yml"));
-    let mutated_yaml = PathBuf::from("demo/rust-dataflow-mutated.yml");
+    // Resolve absolute paths for source data files.
+    let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+    let baseline_data = cwd.join("demo/demo-source-baseline.json");
+    let mutated_data = cwd.join("demo/demo-source-mutated.json");
+
+    // Generate YAML files with absolute paths (dora spawns nodes from
+    // a different working directory, so relative paths don't work).
+    let yaml_path = if let Some(ref df) = args.dataflow {
+        df.clone()
+    } else {
+        generate_yaml(&tmp_path, "baseline.yml", &baseline_data)?
+    };
+    let mutated_yaml = generate_yaml(&tmp_path, "mutated.yml", &mutated_data)?;
+
+    let sink_output = tmp_path.join("sink_output.json");
 
     // ── Step 1: Record baseline ────────────────────────
     section("Step 1 — Record baseline");
@@ -205,24 +273,20 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     ok("assert_no_regression() — no panic");
 
     // ── Step 3: Mutated YAML ───────────────────────────
-    section("Step 3 — Switch to mutated dataflow (timer 100ms→50ms)");
+    section("Step 3 — Switch to mutated dataflow (extra data element)");
 
     step(&format!("Dataflow: {}", mutated_yaml.display()));
-    step("rust-status-node now ticks every 50ms instead of 100ms");
-    step("→ produces more outputs in the same time window");
+    step("test-source reads demo-source-mutated.json (4 elements instead of 3)");
+    step("→ produces one extra output in the same pipeline");
     ok("mutated YAML ready");
 
     // ── Step 4: Regression detected ────────────────────
     section("Step 4 — Replay (regression detected)");
 
     step("Replaying with mutated dataflow...");
-    let _result = RecordSession::attach(&mutated_yaml)?
-        .record_sink("test-sink", &sink_output)
-        .with_timeout(Duration::from_secs(10))
-        .run()?;
-
     let result = ReplaySession::load(&baseline_path)?
         .replay_sink("test-sink", &sink_output)
+        .dataflow(&mutated_yaml)
         .with_timeout(Duration::from_secs(10))
         .run()?;
 
@@ -256,10 +320,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!();
     println!("  Working directory: {}", tmp_path.display());
     println!("  How this helps the DORA community:");
-    println!("    • rust-node and rust-status-node are UNMODIFIED dora examples");
-    println!("    • Only added: test-sink in record mode (1 YAML entry)");
-    println!("    • Any existing dora dataflow gets regression testing by adding");
-    println!("      1 sink node — no code changes to your existing nodes");
+    println!("    • test-source, echo-node, and test-sink are reusable test harness nodes");
+    println!("    • Record once, replay anytime — catch regressions automatically");
+    println!("    • Any deterministic dora dataflow can benefit from the same pattern");
+    println!("    • Only added: 1 test-sink node (1 YAML entry) for regression coverage");
 
     Ok(())
 }

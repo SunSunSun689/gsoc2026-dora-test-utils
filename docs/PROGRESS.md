@@ -1,5 +1,55 @@
 # Progress Log
 
+## Week 11 后半 (2026-08-10): Demo bug fix — 3 bugs in demo_replay.rs
+
+### Context
+
+`scripts/demo-final.sh` Step 4 未检测到回归，`is_clean()` 始终返回 `true`。
+
+### Root cause (3 bugs)
+
+| # | Bug | Impact |
+|---|-----|--------|
+| 1 | Step 4 未调用 `.dataflow(&mutated_yaml)` — ReplaySession 始终使用 baseline metadata 中的原始 YAML | 永远比较 baseline vs. baseline → `is_clean() = true` |
+| 2 | `rust-dataflow` example 输出非确定性 — `status-node` 输出嵌入了 `after N ticks`，N 取决于两次独立 `dora run` 的 timer 启动时机（毫秒级抖动） | Step 2 clean replay 也报假 regression |
+| 3 | YAML 中使用相对路径 — dora spawn 节点的工作目录不是 repo root，`--data-file demo/xxx.json` 找不到文件 | dataflow 启动失败 |
+
+### Fix
+
+- **Bug 1**: 在 Step 4 的 ReplaySession 链中添加 `.dataflow(&mutated_yaml)`
+- **Bug 2**: Demo 从 `rust-dataflow` example 切换到**确定性 echo pipeline**（test-source → echo-node → test-sink）。test-source 从固定 JSON 文件读取数据，每次输出完全一致
+- **Bug 3**: `demo_replay.rs` 动态生成临时 YAML，所有路径使用**绝对路径**（与 integration tests 一致）
+
+### Files changed
+
+| File | Change |
+|------|--------|
+| `examples/demo_replay.rs` | 重写：`generate_yaml()` 生成绝对路径 YAML + echo pipeline + `.dataflow()` fix |
+| `scripts/demo-final.sh` | dora example build 替换为 echo-node build |
+| `demo/demo-source-baseline.json` | NEW — 确定性源数据 `[10, 20, 30]` |
+| `demo/demo-source-mutated.json` | NEW — 变异源数据 `[10, 20, 30, 999]` |
+| `demo/demo-baseline.yml` | 改为参考文件（运行时生成绝对路径版本） |
+| `demo/demo-mutated.yml` | 同上 |
+
+### Verification
+
+```
+Step 1 (Record baseline):       ✅ baseline json saved
+Step 2 (Replay same YAML):      ✅ is_clean() = true, assert_no_regression() passed
+Step 3 (Show mutated YAML):     ✅ mutated YAML ready
+Step 4 (Replay mutated YAML):   ✅ is_clean() = false
+    DiffReport: .count: Number(3) -> Number(4)
+                data.length: Number(3) -> Number(4)
+    assert_no_regression() panics correctly ✅
+```
+
+- `cargo build --example demo_replay` ✅
+- Full lib + e2e test suite unchanged (109 tests)
+
+### Design note
+
+Demo 中使用确定性 echo pipeline 而非 DORA `rust-dataflow` example 的原因是：两个独立的 `dora run` 之间 timer 启动有毫秒级抖动，`status-node` 输出中的 `after N ticks` 不稳定（N=0 或 1）。保留 `demo/rust-dataflow.yml` 和 `demo/rust-dataflow-mutated.yml` 作为参考文件。工具同样适用于任何确定性 DORA 数据流。
+
 ## DORA Version
 
 **Pinned**: `1fba7214b79d8488229f6cc2027b9760dec4d6df` (was `45436aad`)
