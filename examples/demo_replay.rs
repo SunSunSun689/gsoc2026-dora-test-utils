@@ -120,6 +120,7 @@ fn fail(msg: &str) -> ! {
 /// Generate a temp YAML for the rust-dataflow pipeline with absolute paths.
 fn generate_rust_dataflow_yaml(
     tmp: &Path,
+    name: &str,
     rust_node_tick_ms: u64,
     rust_status_node_tick_ms: u64,
 ) -> Result<PathBuf, Box<dyn std::error::Error>> {
@@ -171,7 +172,7 @@ fn generate_rust_dataflow_yaml(
         rust_status_node_tick_ms = rust_status_node_tick_ms,
     );
 
-    let yaml_path = tmp.join("dataflow.yml");
+    let yaml_path = tmp.join(name);
     let mut f = std::fs::File::create(&yaml_path)?;
     f.write_all(yaml.as_bytes())?;
     Ok(yaml_path)
@@ -211,8 +212,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let tmp_path = tmp.into_path();
     let baseline_path = tmp_path.join("baseline.json");
 
-    let baseline_yaml = generate_rust_dataflow_yaml(&tmp_path, 10, 100)?;
-    let mutated_yaml = generate_rust_dataflow_yaml(&tmp_path, 200, 100)?;
+    let baseline_yaml = generate_rust_dataflow_yaml(&tmp_path, "baseline.yml", 10, 100)?;
+    let mutated_yaml = generate_rust_dataflow_yaml(&tmp_path, "mutated.yml", 200, 100)?;
 
     let random_output = tmp_path.join("sink_random_output.json");
     let status_output = tmp_path.join("sink_status_output.json");
