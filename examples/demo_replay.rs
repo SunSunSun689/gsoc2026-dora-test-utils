@@ -313,7 +313,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // ── Summary ────────────────────────────────────────
     section("Summary");
-    println!("  ✅ Record baseline    — {} bytes", baseline_path.metadata()?.len());
+    println!(
+        "  ✅ Record baseline    — {} bytes",
+        baseline_path.metadata()?.len()
+    );
     println!("  ✅ Replay (clean)     — is_clean() = true");
     println!("  ✅ Replay (regression)— is_clean() = false, DiffReport generated");
     println!("  ✅ assert_no_regression() — panics on regression");
