@@ -1,5 +1,24 @@
 # Progress Log
 
+## Week 12 后半 (2026-08-12): Field filtering for ReplaySession
+
+### Changes
+
+- **`src/record.rs`**: Added `ignore_paths` and `ignore_sink` builder methods to `ReplaySession`; filtering wired into `compare_recordings` and `compare_sink_outputs`
+- **`examples/demo_replay.rs`**: Rewritten to use DORA `rust-dataflow` example (unmodified upstream nodes) with filtering demo
+- **`demo/rust-dataflow.yml`**: Added `test-sink-random` node for recording deterministic UInt64 output
+- **`tests/e2e_replay.rs`**: Added e2e test for ignore_paths filtering
+- **`scripts/demo-final.sh`**: Auto-clone dora, build rust-dataflow example nodes
+
+### Verification
+
+- `cargo check` ✅
+- `cargo fmt --check` ✅
+- `cargo clippy --lib` ✅
+- `cargo test --lib` ✅ (85/85 pass)
+- `cargo test --test e2e_replay -- --test-threads=1` ✅ (12/12 pass)
+- Full suite: 115 tests (85 lib + 5 e2e + 4 e2e_record + 12 e2e_replay + 6 integration + 3 smoke)
+
 ## Week 11 后半 (2026-08-10): Demo bug fix — 3 bugs in demo_replay.rs
 
 ### Context
