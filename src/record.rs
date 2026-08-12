@@ -514,7 +514,12 @@ impl ReplaySession {
         }
 
         // Compare.
-        let report = compare_recordings(&self.recording.sinks, &current_sinks);
+        let report = compare_recordings(
+            &self.recording.sinks,
+            &current_sinks,
+            &self.ignore_paths,
+            &self.ignore_sinks,
+        );
 
         // Build metadata reflecting the actual values used (overrides applied).
         let mut effective_metadata = self.recording.metadata.clone();
@@ -783,14 +788,25 @@ fn get_dora_version(dora_binary: &Path) -> Result<String, RecordError> {
 fn compare_recordings(
     baseline: &HashMap<String, serde_json::Value>,
     current: &HashMap<String, serde_json::Value>,
+    ignore_paths: &[String],
+    ignore_sinks: &[String],
 ) -> DiffReport {
     let mut regressions = Vec::new();
 
+    // Clone maps and remove ignored sinks before comparison.
+    let mut baseline = baseline.clone();
+    let mut current = current.clone();
+    for sink_id in ignore_sinks {
+        baseline.remove(sink_id);
+        current.remove(sink_id);
+    }
+
     // Check baseline sinks present in current.
-    for (sink_id, baseline_value) in baseline {
+    for (sink_id, baseline_value) in &baseline {
         match current.get(sink_id) {
             Some(current_value) => {
-                let differences = compare_sink_outputs(sink_id, baseline_value, current_value);
+                let differences =
+                    compare_sink_outputs(sink_id, baseline_value, current_value, ignore_paths);
                 regressions.push(SinkDiff {
                     sink_id: sink_id.clone(),
                     status: if differences.is_empty() {
@@ -832,6 +848,7 @@ fn compare_sink_outputs(
     _sink_id: &str,
     baseline: &serde_json::Value,
     current: &serde_json::Value,
+    ignore_paths: &[String],
 ) -> Vec<FieldDiff> {
     let mut diffs = Vec::new();
     json_diff("", baseline, current, &mut diffs);
@@ -881,6 +898,13 @@ fn compare_sink_outputs(
             }
         }
     }
+
+    // Filter out user-requested ignore paths.
+    // Normalize: strip leading dot from generated path before matching.
+    diffs.retain(|d| {
+        let normalized = d.path.strip_prefix('.').unwrap_or(&d.path);
+        !ignore_paths.iter().any(|ip| ip == normalized)
+    });
 
     diffs
 }
@@ -1078,7 +1102,7 @@ mod tests {
     fn test_compare_identical() {
         let baseline: serde_json::Value = serde_json::json!({"data": [1, 2, 3], "count": 3});
         let current = baseline.clone();
-        let diffs = compare_sink_outputs("test", &baseline, &current);
+        let diffs = compare_sink_outputs("test", &baseline, &current, &[]);
         assert!(diffs.is_empty(), "identical outputs should have no diffs");
     }
 
@@ -1086,7 +1110,7 @@ mod tests {
     fn test_compare_count_diff() {
         let baseline = serde_json::json!({"data": [1, 2, 3], "count": 3});
         let current = serde_json::json!({"data": [1, 2, 3], "count": 4});
-        let diffs = compare_sink_outputs("test", &baseline, &current);
+        let diffs = compare_sink_outputs("test", &baseline, &current, &[]);
         assert_eq!(diffs.len(), 1);
         assert!(diffs[0].path.contains("count"));
     }
@@ -1095,7 +1119,7 @@ mod tests {
     fn test_compare_data_diff() {
         let baseline = serde_json::json!({"data": [1, 2, 3], "count": 3});
         let current = serde_json::json!({"data": [1, 2, 99], "count": 3});
-        let diffs = compare_sink_outputs("test", &baseline, &current);
+        let diffs = compare_sink_outputs("test", &baseline, &current, &[]);
         assert!(!diffs.is_empty(), "data difference should be detected");
     }
 
@@ -1183,7 +1207,7 @@ mod tests {
         baseline.insert("s1".into(), serde_json::json!({"data": [1, 2], "count": 2}));
         let mut current = HashMap::new();
         current.insert("s1".into(), serde_json::json!({"data": [1, 2], "count": 2}));
-        let report = compare_recordings(&baseline, &current);
+        let report = compare_recordings(&baseline, &current, &[], &[]);
         assert_eq!(report.regressions.len(), 1);
         assert_eq!(report.regressions[0].status, DiffStatus::Match);
     }
@@ -1194,7 +1218,7 @@ mod tests {
         baseline.insert("s1".into(), serde_json::json!({"data": [1]}));
         baseline.insert("s2".into(), serde_json::json!({"data": [2]}));
         let current = HashMap::new(); // both missing
-        let report = compare_recordings(&baseline, &current);
+        let report = compare_recordings(&baseline, &current, &[], &[]);
         assert_eq!(report.regressions.len(), 2);
         assert!(report
             .regressions
@@ -1207,7 +1231,7 @@ mod tests {
         let baseline = HashMap::new();
         let mut current = HashMap::new();
         current.insert("s1".into(), serde_json::json!({"data": [1]}));
-        let report = compare_recordings(&baseline, &current);
+        let report = compare_recordings(&baseline, &current, &[], &[]);
         assert_eq!(report.regressions.len(), 1);
         assert_eq!(report.regressions[0].status, DiffStatus::Extra);
     }
@@ -1221,7 +1245,7 @@ mod tests {
         current.insert("match-sink".into(), serde_json::json!({"data": [1]}));
         current.insert("mismatch-sink".into(), serde_json::json!({"data": [99]}));
         current.insert("extra-sink".into(), serde_json::json!({"data": [3]}));
-        let report = compare_recordings(&baseline, &current);
+        let report = compare_recordings(&baseline, &current, &[], &[]);
 
         let statuses: Vec<_> = report
             .regressions
@@ -1246,7 +1270,7 @@ mod tests {
         // by the .data prefix retain (fix #1).
         let baseline = serde_json::json!({"data": [1, 2, 3], "data_type": "Int32", "count": 3});
         let current = serde_json::json!({"data": [1, 2, 3], "data_type": "Int64", "count": 3});
-        let diffs = compare_sink_outputs("test", &baseline, &current);
+        let diffs = compare_sink_outputs("test", &baseline, &current, &[]);
         // .data_type differs and starts_with(".data") was the bug — should
         // now be preserved as a FieldDiff.
         assert!(
@@ -1260,7 +1284,7 @@ mod tests {
         // .data itself differs — should trigger semantic comparison.
         let baseline = serde_json::json!({"data": [1, 2, 3], "count": 3});
         let current = serde_json::json!({"data": [1, 2, 99], "count": 3});
-        let diffs = compare_sink_outputs("test", &baseline, &current);
+        let diffs = compare_sink_outputs("test", &baseline, &current, &[]);
         assert!(!diffs.is_empty(), "data difference should be detected");
     }
 
