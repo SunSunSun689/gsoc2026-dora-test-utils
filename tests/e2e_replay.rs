@@ -147,6 +147,42 @@ fn replay_clean_no_regression() {
 
 #[test]
 #[serial]
+fn replay_ignore_paths_count_filtering() {
+    if !dora_available() {
+        eprintln!("SKIP");
+        return;
+    }
+    build_binaries();
+
+    let tmp = tempfile::TempDir::new().unwrap();
+    let (yaml_path, sink_output) = generate_echo_yaml_with_sink_output(tmp.path());
+
+    // Record baseline.
+    let baseline = RecordSession::attach(&yaml_path)
+        .unwrap()
+        .record_sink("test-sink", &sink_output)
+        .with_timeout(std::time::Duration::from_secs(10))
+        .run()
+        .unwrap();
+    let baseline_path = tmp.path().join("baseline.json");
+    baseline.save(&baseline_path).unwrap();
+
+    // Replay with ignore_paths — ignore the "count" field to tolerate
+    // ±1 timing jitter between record and replay.
+    let result = ReplaySession::load(&baseline_path)
+        .unwrap()
+        .replay_sink("test-sink", &sink_output)
+        .ignore_paths(&["count"])
+        .with_timeout(std::time::Duration::from_secs(10))
+        .run()
+        .unwrap();
+
+    assert!(result.is_clean());
+    result.assert_no_regression(); // should not panic
+}
+
+#[test]
+#[serial]
 fn replay_regression_detected() {
     if !dora_available() {
         eprintln!("SKIP");
