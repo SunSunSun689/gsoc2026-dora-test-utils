@@ -327,6 +327,32 @@ Rewrote `examples/demo_replay.rs` for final submission quality:
 
 Also updated `scripts/demo-week12.sh` for week11 branch.
 
+### 4. Final-review polish wave (2026-08-12)
+
+Final whole-branch review of week11: **MERGE verdict, no blocking findings**.
+5 non-blocking polish items applied in one commit `97b01d0`:
+
+1. Demo no longer claims "exactly 100" events — on a loaded machine node startup
+   can eat into the 10s window, so counts are stated as "~100"
+   (`examples/demo_replay.rs`)
+2. `check_bin` build hint corrected for DORA upstream nodes:
+   `cargo build -p rust-dataflow-example-node --manifest-path dora/Cargo.toml`
+3. `ReplaySession::ignore_paths` doc now states it **replaces** the previous list
+   (unlike `ignore_sink`, which appends) (`src/record.rs`)
+4. Deleted stale echo-era demo files: `demo/demo-baseline.yml`,
+   `demo/demo-mutated.yml`, `demo/demo-source-baseline.json`,
+   `demo/demo-source-mutated.json` — unreferenced by the new rust-dataflow demo
+5. `scripts/demo-final.sh` Step 0 now verifies the dora checkout is at the pinned
+   commit `1fba721` (via `git rev-parse --short HEAD`) and warns with
+   re-clone/checkout guidance on mismatch
+
+### Verification (2026-08-12)
+
+- `cargo build --example demo_replay` ✅
+- `cargo fmt --check` ✅
+- `cargo clippy --lib -- -D warnings` ✅ (zero warnings)
+- `cargo test --lib` ✅ (85/85 pass)
+
 ### Commits
 
 | Commit | Description |
@@ -334,6 +360,7 @@ Also updated `scripts/demo-week12.sh` for week11 branch.
 | `169680e` | feat: upgrade DORA dep 45436aad → 1fba721, remove flume |
 | `c1897ee` | fix: integration tests no longer silently pass when dora CLI is missing |
 | `99d42ea` | docs(demo): enhance demo_replay — CLI args, structured output, metadata display |
+| `97b01d0` | polish: address final-review feedback — demo claims, build hints, pin check, stale files |
 
 ### Verification
 
