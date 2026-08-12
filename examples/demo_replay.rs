@@ -1,18 +1,15 @@
-//! dora-test-utils Demo — Record/Replay regression testing.
+//! dora-test-utils Demo — Record/Replay regression testing with DORA's
+//! official rust-dataflow example.
 //!
-//! Records a deterministic echo pipeline (test-source → echo-node → test-sink)
-//! in record mode, then replays to detect regressions when source data changes.
+//! Records rust-node output (deterministic UInt64, seed=42) and status-node
+//! output (non-deterministic String) from a real DORA pipeline, then replays
+//! to detect regressions.
 //!
-//! ## Usage
-//!
-//! ```bash
-//! # Build our binaries + echo-node
-//! cargo build --bin test-source --bin test-sink --bin echo-node --example demo_replay
-//!
-//! # Run the demo
-//! cargo run --example demo_replay
-//! cargo run --example demo_replay -- --dora ./dora/target/debug/dora
-//! ```
+//! Demonstrates:
+//!   - Non-invasive: DORA example nodes are NOT modified
+//!   - ignore_paths: skips .count field (timing jitter)
+//!   - ignore_sink: skips status-node output (non-deterministic)
+//!   - Regression detection: mutated tick rate → array length mismatch
 
 use dora_test_utils::record::{RecordSession, ReplaySession};
 use std::io::Write;
@@ -25,7 +22,6 @@ use std::time::Duration;
 #[derive(Default)]
 struct Args {
     dora: Option<PathBuf>,
-    dataflow: Option<PathBuf>,
 }
 
 fn parse_args() -> Args {
@@ -38,13 +34,9 @@ fn parse_args() -> Args {
                 i += 1;
                 opts.dora = Some(PathBuf::from(&args[i]));
             }
-            "--dataflow" => {
-                i += 1;
-                opts.dataflow = Some(PathBuf::from(&args[i]));
-            }
             other => {
                 eprintln!("Unknown flag: {other}");
-                eprintln!("Usage: demo_replay [--dora <path>] [--dataflow <path>]");
+                eprintln!("Usage: demo_replay [--dora <path>]");
                 std::process::exit(2);
             }
         }
@@ -79,85 +71,107 @@ fn bin_path(name: &str) -> PathBuf {
     } else {
         "release"
     };
-    let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
-    cwd.join("target").join(profile).join(name)
+    std::env::current_dir()
+        .unwrap_or_else(|_| PathBuf::from("."))
+        .join("target")
+        .join(profile)
+        .join(name)
 }
 
-fn check_bin(name: &str) -> PathBuf {
-    let path = bin_path(name);
-    if path.exists() {
-        return path;
+fn dora_bin_path(name: &str) -> PathBuf {
+    let profile = if cfg!(debug_assertions) {
+        "debug"
+    } else {
+        "release"
+    };
+    std::env::current_dir()
+        .unwrap_or_else(|_| PathBuf::from("."))
+        .join("dora/target")
+        .join(profile)
+        .join(name)
+}
+
+fn check_bin(label: &str, path: &Path) {
+    if !path.exists() {
+        eprintln!(
+            "ERROR: {} not found at {}\n  Build: cargo build --bin {}",
+            label,
+            path.display(),
+            label,
+        );
+        std::process::exit(1);
     }
-    eprintln!(
-        "ERROR: binary '{}' not found at {}\n\
-         Build: cargo build --bin {}",
-        name,
-        path.display(),
-        name,
-    );
-    std::process::exit(1);
 }
 
 fn section(title: &str) {
     println!("\n═══ {} ═══\n", title);
 }
-
 fn step(msg: &str) {
     println!("▸ {}", msg);
 }
-
 fn ok(msg: &str) {
     println!("  ✅ {}", msg);
 }
-
 fn fail(msg: &str) -> ! {
     eprintln!("  ❌ {}", msg);
     std::process::exit(1);
 }
 
-/// Generate a temp YAML for an echo pipeline with absolute paths.
-///
-/// This is necessary because dora spawns node processes from a different
-/// working directory, so all file paths in the YAML must be absolute.
-fn generate_yaml(
+/// Generate a temp YAML for the rust-dataflow pipeline with absolute paths.
+fn generate_rust_dataflow_yaml(
     tmp: &Path,
-    name: &str,
-    source_file: &Path,
+    rust_node_tick_ms: u64,
+    rust_status_node_tick_ms: u64,
 ) -> Result<PathBuf, Box<dyn std::error::Error>> {
-    let source_bin = check_bin("test-source");
-    let echo_bin = check_bin("echo-node");
-    let sink_bin = check_bin("test-sink");
-    let output_file = tmp.join("sink_output.json");
+    let rust_node_bin = dora_bin_path("rust-dataflow-example-node");
+    let status_node_bin = dora_bin_path("rust-dataflow-example-status-node");
+    let test_sink_bin = bin_path("test-sink");
+    let random_output = tmp.join("sink_random_output.json");
+    let status_output = tmp.join("sink_status_output.json");
+
+    check_bin("rust-dataflow-example-node", &rust_node_bin);
+    check_bin("rust-dataflow-example-status-node", &status_node_bin);
+    check_bin("test-sink", &test_sink_bin);
 
     let yaml = format!(
         r#"nodes:
-  - id: test-source
-    path: {source_bin}
-    args: "--output-id data --data-file {source_file}"
-    outputs:
-      - data
-
-  - id: echo-node
-    path: {echo_bin}
+  - id: rust-node
+    path: {rust_node_bin}
     inputs:
-      data: test-source/data
+      tick: dora/timer/millis/{rust_node_tick_ms}
     outputs:
-      - data
+      - random
 
-  - id: test-sink
-    path: {sink_bin}
+  - id: rust-status-node
+    path: {status_node_bin}
     inputs:
-      data: echo-node/data
-    args: "--output-file {output_file} --record-mode"
+      tick: dora/timer/millis/{rust_status_node_tick_ms}
+      random: rust-node/random
+    outputs:
+      - status
+
+  - id: test-sink-random
+    path: {test_sink_bin}
+    inputs:
+      random: rust-node/random
+    args: "--output-file {random_output} --record-mode"
+
+  - id: test-sink-status
+    path: {test_sink_bin}
+    inputs:
+      status: rust-status-node/status
+    args: "--output-file {status_output} --record-mode"
 "#,
-        source_bin = source_bin.display(),
-        source_file = source_file.display(),
-        echo_bin = echo_bin.display(),
-        sink_bin = sink_bin.display(),
-        output_file = output_file.display(),
+        rust_node_bin = rust_node_bin.display(),
+        status_node_bin = status_node_bin.display(),
+        test_sink_bin = test_sink_bin.display(),
+        random_output = random_output.display(),
+        status_output = status_output.display(),
+        rust_node_tick_ms = rust_node_tick_ms,
+        rust_status_node_tick_ms = rust_status_node_tick_ms,
     );
 
-    let yaml_path = tmp.join(name);
+    let yaml_path = tmp.join("dataflow.yml");
     let mut f = std::fs::File::create(&yaml_path)?;
     f.write_all(yaml.as_bytes())?;
     Ok(yaml_path)
@@ -168,10 +182,9 @@ fn generate_yaml(
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args = parse_args();
 
-    // ── Preflight ──────────────────────────────────────
     section("dora-test-utils — Record/Replay Demo");
-    println!("  Deterministic echo pipeline (test-source → echo-node → test-sink)");
-    println!("  Regression trigger: extra data element in mutated source");
+    println!("  DORA rust-dataflow example (unmodified upstream nodes)");
+    println!("  Demonstrates ignore_paths + ignore_sink filtering");
     println!();
 
     let _dora = match resolve_dora(&args) {
@@ -190,11 +203,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     };
 
-    // Pre-flight: verify required binaries exist
-    let _ = check_bin("test-source");
-    let _ = check_bin("echo-node");
-    let _ = check_bin("test-sink");
-    ok("binaries found");
+    ok("prerequisites met");
 
     // ── Setup ──────────────────────────────────────────
     let tmp = tempfile::TempDir::new()?;
@@ -202,59 +211,45 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let tmp_path = tmp.into_path();
     let baseline_path = tmp_path.join("baseline.json");
 
-    // Resolve absolute paths for source data files.
-    let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
-    let baseline_data = cwd.join("demo/demo-source-baseline.json");
-    let mutated_data = cwd.join("demo/demo-source-mutated.json");
+    let baseline_yaml = generate_rust_dataflow_yaml(&tmp_path, 10, 100)?;
+    let mutated_yaml = generate_rust_dataflow_yaml(&tmp_path, 20, 100)?;
 
-    // Generate YAML files with absolute paths (dora spawns nodes from
-    // a different working directory, so relative paths don't work).
-    let yaml_path = if let Some(ref df) = args.dataflow {
-        df.clone()
-    } else {
-        generate_yaml(&tmp_path, "baseline.yml", &baseline_data)?
-    };
-    let mutated_yaml = generate_yaml(&tmp_path, "mutated.yml", &mutated_data)?;
-
-    let sink_output = tmp_path.join("sink_output.json");
+    let random_output = tmp_path.join("sink_random_output.json");
+    let status_output = tmp_path.join("sink_status_output.json");
 
     // ── Step 1: Record baseline ────────────────────────
     section("Step 1 — Record baseline");
 
-    step(&format!("Dataflow: {}", yaml_path.display()));
+    step(&format!("Dataflow: {}", baseline_yaml.display()));
     step("Running dora run --stop-after 10s ...");
+    step("Recording: test-sink-random (rust-node UInt64) + test-sink-status (String)");
 
-    let recording = RecordSession::attach(&yaml_path)?
-        .record_sink("test-sink", &sink_output)
+    let recording = RecordSession::attach(&baseline_yaml)?
+        .record_sink("test-sink-random", &random_output)
+        .record_sink("test-sink-status", &status_output)
         .with_timeout(Duration::from_secs(10))
         .run()?;
 
     recording.save(&baseline_path)?;
     ok(&format!("baseline saved → {}", baseline_path.display()));
+
+    // Show recorded data sample
     println!();
     println!("  ── Recording metadata ──");
-    println!("  dataflow:       {}", recording.metadata.dataflow_yaml);
-    println!("  recorded at:    {}", recording.metadata.recorded_at_unix);
-    println!("  timeout:        {}s", recording.metadata.timeout_secs);
     println!("  dora version:   {}", recording.metadata.dora_version);
     println!(
         "  sinks recorded: {:?}",
         recording.sinks.keys().collect::<Vec<_>>()
     );
-
-    // Show sample of recorded data
-    if let Some(sink_data) = recording.sinks.get("test-sink") {
-        println!();
-        println!("  ── Recorded sink data (sample) ──");
-        if let Some(items) = sink_data.as_array() {
-            for item in items.iter().take(3) {
-                let pretty = serde_json::to_string_pretty(item)?;
-                for line in pretty.lines() {
-                    println!("  {}", line);
-                }
-            }
-            if items.len() > 3 {
-                println!("  ... ({} entries total)", items.len());
+    if let Some(random_data) = recording.sinks.get("test-sink-random") {
+        if let Some(count) = random_data.get("count") {
+            println!("  random events:  {count} (expected ~1000 for 10ms tick, 10s)");
+        }
+    }
+    if let Some(status_data) = recording.sinks.get("test-sink-status") {
+        if let Some(arr) = status_data.get("data").and_then(|d| d.as_array()) {
+            if let Some(first) = arr.first().and_then(|v| v.as_str()) {
+                println!("  status sample:  {first}");
             }
         }
     }
@@ -262,9 +257,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // ── Step 2: Clean replay ───────────────────────────
     section("Step 2 — Replay (same YAML, no regression)");
 
-    step("Replaying with identical dataflow...");
+    step("Using ignore_paths(&[\"count\"]) to tolerate ±1 timing jitter");
+    step("Using ignore_sink(\"test-sink-status\") to skip non-deterministic status output");
     let result = ReplaySession::load(&baseline_path)?
-        .replay_sink("test-sink", &sink_output)
+        .replay_sink("test-sink-random", &random_output)
+        .replay_sink("test-sink-status", &status_output)
+        .ignore_paths(&["count"])
+        .ignore_sink("test-sink-status")
         .with_timeout(Duration::from_secs(10))
         .run()?;
 
@@ -272,21 +271,23 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     result.assert_no_regression();
     ok("assert_no_regression() — no panic");
 
-    // ── Step 3: Mutated YAML ───────────────────────────
-    section("Step 3 — Switch to mutated dataflow (extra data element)");
+    // ── Step 3: Mutated dataflow ───────────────────────
+    section("Step 3 — Switch to mutated dataflow (rust-node tick: 10ms → 20ms)");
 
-    step(&format!("Dataflow: {}", mutated_yaml.display()));
-    step("test-source reads demo-source-mutated.json (4 elements instead of 3)");
-    step("→ produces one extra output in the same pipeline");
-    ok("mutated YAML ready");
+    step("rust-node now runs at half speed → ~500 events instead of ~1000");
+    step("Same ignore_paths + ignore_sink filters applied");
+    ok("mutated dataflow ready");
 
     // ── Step 4: Regression detected ────────────────────
     section("Step 4 — Replay (regression detected)");
 
     step("Replaying with mutated dataflow...");
     let result = ReplaySession::load(&baseline_path)?
-        .replay_sink("test-sink", &sink_output)
+        .replay_sink("test-sink-random", &random_output)
+        .replay_sink("test-sink-status", &status_output)
         .dataflow(&mutated_yaml)
+        .ignore_paths(&["count"])
+        .ignore_sink("test-sink-status")
         .with_timeout(Duration::from_secs(10))
         .run()?;
 
@@ -299,7 +300,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Print the structured diff
     let diff = result.diff();
     println!();
-    println!("{}", diff);
+    println!("{diff}");
 
     // assert_no_regression should panic here
     step("Verifying assert_no_regression() panics on regression...");
@@ -313,20 +314,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // ── Summary ────────────────────────────────────────
     section("Summary");
-    println!(
-        "  ✅ Record baseline    — {} bytes",
-        baseline_path.metadata()?.len()
-    );
-    println!("  ✅ Replay (clean)     — is_clean() = true");
-    println!("  ✅ Replay (regression)— is_clean() = false, DiffReport generated");
-    println!("  ✅ assert_no_regression() — panics on regression");
+    println!("  ✅ Record baseline         — 2 sinks (random UInt64 + status String)");
+    println!("  ✅ Replay (clean)          — is_clean() = true (count ignored, status skipped)");
+    println!("  ✅ Replay (regression)     — is_clean() = false, array length mismatch detected");
+    println!("  ✅ assert_no_regression()  — panics on regression");
     println!();
-    println!("  Working directory: {}", tmp_path.display());
     println!("  How this helps the DORA community:");
-    println!("    • test-source, echo-node, and test-sink are reusable test harness nodes");
-    println!("    • Record once, replay anytime — catch regressions automatically");
-    println!("    • Any deterministic dora dataflow can benefit from the same pattern");
-    println!("    • Only added: 1 test-sink node (1 YAML entry) for regression coverage");
+    println!("    • DORA rust-dataflow example nodes are UNMODIFIED");
+    println!("    • Only added: 2 test-sink nodes (2 YAML entries) for regression coverage");
+    println!("    • ignore_paths handles timing jitter (tick count ±1)");
+    println!("    • ignore_sink handles non-deterministic output (debug strings)");
+    println!("    • Any deterministic DORA dataflow can benefit from the same pattern");
+    println!("    • Filtering makes Record/Replay practical for real pipelines");
 
     Ok(())
 }
