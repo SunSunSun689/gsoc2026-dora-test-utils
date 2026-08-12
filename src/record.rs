@@ -327,6 +327,8 @@ pub struct ReplaySession {
     sinks: Vec<(String, PathBuf)>,
     dataflow_override: Option<PathBuf>,
     timeout_override: Option<Duration>,
+    ignore_paths: Vec<String>,
+    ignore_sinks: Vec<String>,
 }
 
 impl ReplaySession {
@@ -341,6 +343,8 @@ impl ReplaySession {
             sinks: Vec::new(),
             dataflow_override: None,
             timeout_override: None,
+            ignore_paths: Vec::new(),
+            ignore_sinks: Vec::new(),
         })
     }
 
@@ -367,6 +371,28 @@ impl ReplaySession {
     /// Override the timeout from the Recording.
     pub fn with_timeout(mut self, timeout: Duration) -> Self {
         self.timeout_override = Some(timeout);
+        self
+    }
+
+    /// JSON field paths to skip during comparison.
+    ///
+    /// Paths are matched against internal diff paths (e.g. `.count`, `.data[0]`).
+    /// Both forms are accepted: `"count"` and `".count"` match the same field.
+    pub fn ignore_paths(mut self, paths: &[&str]) -> Self {
+        self.ignore_paths = paths
+            .iter()
+            .map(|s| s.strip_prefix('.').unwrap_or(s).to_string())
+            .collect();
+        self
+    }
+
+    /// Skip a sink entirely during comparison.
+    ///
+    /// The sink is removed from both baseline and current maps. If the sink
+    /// does not exist in either, it is silently ignored. Call repeatedly for
+    /// multiple sinks, or call once per sink.
+    pub fn ignore_sink(mut self, sink_id: &str) -> Self {
+        self.ignore_sinks.push(sink_id.to_string());
         self
     }
 
