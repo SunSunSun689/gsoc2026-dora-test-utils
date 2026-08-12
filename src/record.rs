@@ -900,10 +900,13 @@ fn compare_sink_outputs(
     }
 
     // Filter out user-requested ignore paths.
-    // Normalize: strip leading dot from generated path before matching.
+    // Normalize: strip leading dots from both the generated path and the
+    // ignore entry so "count" and ".count" match the same field.
     diffs.retain(|d| {
         let normalized = d.path.strip_prefix('.').unwrap_or(&d.path);
-        !ignore_paths.iter().any(|ip| ip == normalized)
+        !ignore_paths
+            .iter()
+            .any(|ip| ip.strip_prefix('.').unwrap_or(ip) == normalized)
     });
 
     diffs
@@ -1417,5 +1420,117 @@ mod tests {
         let display = report.to_string();
         assert!(display.contains("No regressions"));
         assert!(display.contains("2 sinks"));
+    }
+
+    // ── ignore_paths / ignore_sink filtering ─────────────────────
+
+    #[test]
+    fn ignore_paths_filters_count_field() {
+        // Two recordings that differ only in .count — filtering .count makes them clean.
+        let baseline: HashMap<String, serde_json::Value> = [(
+            "sink-1".into(),
+            serde_json::json!({"data": [1, 2, 3], "count": 3}),
+        )]
+        .into();
+        let current: HashMap<String, serde_json::Value> = [(
+            "sink-1".into(),
+            serde_json::json!({"data": [1, 2, 3], "count": 5}),
+        )]
+        .into();
+
+        // Without filtering — regression
+        let report = compare_recordings(&baseline, &current, &[], &[]);
+        assert!(!report.regressions.is_empty());
+        assert_eq!(report.regressions[0].status, DiffStatus::Mismatch);
+
+        // With filtering — clean
+        let report = compare_recordings(&baseline, &current, &["count".to_string()], &[]);
+        assert!(
+            report.regressions.is_empty()
+                || report
+                    .regressions
+                    .iter()
+                    .all(|r| r.status == DiffStatus::Match)
+        );
+    }
+
+    #[test]
+    fn ignore_paths_accepts_leading_dot() {
+        let baseline: HashMap<String, serde_json::Value> =
+            [("sink-1".into(), serde_json::json!({"count": 3}))].into();
+        let current: HashMap<String, serde_json::Value> =
+            [("sink-1".into(), serde_json::json!({"count": 5}))].into();
+
+        // ".count" should work the same as "count"
+        let report = compare_recordings(&baseline, &current, &[".count".to_string()], &[]);
+        assert!(
+            report.regressions.is_empty()
+                || report
+                    .regressions
+                    .iter()
+                    .all(|r| r.status == DiffStatus::Match)
+        );
+    }
+
+    #[test]
+    fn ignore_sink_removes_sink_from_comparison() {
+        let baseline: HashMap<String, serde_json::Value> = [
+            ("keep".into(), serde_json::json!({"x": 1})),
+            ("drop".into(), serde_json::json!({"x": 2})),
+        ]
+        .into();
+        let current: HashMap<String, serde_json::Value> = [
+            ("keep".into(), serde_json::json!({"x": 1})),
+            ("drop".into(), serde_json::json!({"x": 999})), // massive diff, but ignored
+        ]
+        .into();
+
+        let report = compare_recordings(&baseline, &current, &[], &["drop".to_string()]);
+        // Only "keep" should be in the report
+        assert_eq!(report.regressions.len(), 1);
+        assert_eq!(report.regressions[0].sink_id, "keep");
+        assert_eq!(report.regressions[0].status, DiffStatus::Match);
+    }
+
+    #[test]
+    fn ignore_sink_unknown_id_silent() {
+        let baseline: HashMap<String, serde_json::Value> =
+            [("sink-1".into(), serde_json::json!({"x": 1}))].into();
+        let current = baseline.clone();
+
+        // Should not panic for non-existent sink ID
+        let report = compare_recordings(&baseline, &current, &[], &["nonexistent".to_string()]);
+        assert_eq!(report.regressions.len(), 1);
+        assert_eq!(report.regressions[0].status, DiffStatus::Match);
+    }
+
+    #[test]
+    fn replay_result_is_clean_with_filters() {
+        let baseline: HashMap<String, serde_json::Value> = [(
+            "sink-1".into(),
+            serde_json::json!({"data": [1, 2], "count": 2}),
+        )]
+        .into();
+        let current: HashMap<String, serde_json::Value> = [(
+            "sink-1".into(),
+            serde_json::json!({"data": [1, 2], "count": 99}),
+        )]
+        .into();
+
+        let report = compare_recordings(&baseline, &current, &["count".to_string()], &[]);
+
+        let metadata = RecordingMetadata {
+            dataflow_yaml: "/tmp/test.yml".into(),
+            recorded_at_unix: 0,
+            timeout_secs: 10.0,
+            dora_version: "test".into(),
+        };
+        let result = ReplayResult {
+            metadata,
+            baseline_sinks: baseline,
+            current_sinks: current,
+            report,
+        };
+        assert!(result.is_clean());
     }
 }
