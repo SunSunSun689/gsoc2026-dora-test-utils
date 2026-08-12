@@ -1,9 +1,11 @@
 # dora-test-utils Record/Replay Demo
 # Uses DORA's official rust-dataflow example nodes (unmodified)
-# with our test-sink for recording outputs.
+# with two test-sink nodes for recording outputs.
 #
-# Run via demo_replay.rs or manually:
-#   dora run demo/rust-dataflow.yml --stop-after 10s
+# test-sink-random records rust-node's deterministic UInt64 output (seed=42).
+# test-sink-status records status-node's non-deterministic String output
+# (used to demo ignore_sink filtering).
+
 nodes:
   - id: rust-node
     build: cargo build -p rust-dataflow-example-node --manifest-path ../dora/Cargo.toml
@@ -28,8 +30,14 @@ nodes:
     output_types:
       status: std/core/v1/String
 
-  - id: test-sink
+  - id: test-sink-random
+    path: ../target/debug/test-sink
+    inputs:
+      random: rust-node/random
+    args: "--output-file ./sink_random_output.json --record-mode"
+
+  - id: test-sink-status
     path: ../target/debug/test-sink
     inputs:
       status: rust-status-node/status
-    args: "--output-file ./sink_output.json --record-mode"
+    args: "--output-file ./sink_status_output.json --record-mode"

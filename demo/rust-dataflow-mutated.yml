@@ -1,18 +1,20 @@
 # dora-test-utils Record/Replay Demo -- MUTATED VARIANT
-# Same as rust-dataflow.yml, except rust-status-node's tick timer
-# is 50ms instead of 100ms (doubles output frequency to trigger
+# Same as rust-dataflow.yml, except rust-node's tick timer
+# is 20ms instead of 10ms (halves random output frequency to trigger
 # a regression in ReplaySession comparisons).
 # Uses DORA's official rust-dataflow example nodes (unmodified)
-# with our test-sink for recording outputs.
+# with two test-sink nodes for recording outputs.
 #
-# Run via demo_replay.rs or manually:
-#   dora run demo/rust-dataflow-mutated.yml --stop-after 10s
+# test-sink-random records rust-node's deterministic UInt64 output (seed=42).
+# test-sink-status records status-node's non-deterministic String output
+# (used to demo ignore_sink filtering).
+
 nodes:
   - id: rust-node
     build: cargo build -p rust-dataflow-example-node --manifest-path ../dora/Cargo.toml
     path: ../dora/target/debug/rust-dataflow-example-node
     inputs:
-      tick: dora/timer/millis/10
+      tick: dora/timer/millis/20
     outputs:
       - random
     output_types:
@@ -22,7 +24,7 @@ nodes:
     build: cargo build -p rust-dataflow-example-status-node --manifest-path ../dora/Cargo.toml
     path: ../dora/target/debug/rust-dataflow-example-status-node
     inputs:
-      tick: dora/timer/millis/50
+      tick: dora/timer/millis/100
       random: rust-node/random
     input_types:
       random: std/core/v1/UInt64
@@ -31,8 +33,14 @@ nodes:
     output_types:
       status: std/core/v1/String
 
-  - id: test-sink
+  - id: test-sink-random
+    path: ../target/debug/test-sink
+    inputs:
+      random: rust-node/random
+    args: "--output-file ./sink_random_output.json --record-mode"
+
+  - id: test-sink-status
     path: ../target/debug/test-sink
     inputs:
       status: rust-status-node/status
-    args: "--output-file ./sink_output.json --record-mode"
+    args: "--output-file ./sink_status_output.json --record-mode"

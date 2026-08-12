@@ -1,0 +1,43 @@
+# dora-test-utils Record/Replay Demo — rust-dataflow Baseline YAML (reference)
+#
+# NOTE: demo_replay.rs generates temp YAMLs with absolute paths at runtime
+# (dora spawns nodes from a different working directory).  This file is kept
+# as human-readable reference for the pipeline structure.  The actual YAML
+# used by the demo is generated in /tmp.
+#
+# Pipeline: rust-node → rust-status-node (DORA official example, unmodified)
+#   + two test-sinks: test-sink-random (deterministic UInt64, seed=42) and
+#   test-sink-status (non-deterministic String, used to demo ignore_sink).
+nodes:
+  - id: rust-node
+    path: <absolute>/dora/target/debug/rust-dataflow-example-node
+    inputs:
+      tick: dora/timer/millis/10
+    outputs:
+      - random
+    output_types:
+      random: std/core/v1/UInt64
+
+  - id: rust-status-node
+    path: <absolute>/dora/target/debug/rust-dataflow-example-status-node
+    inputs:
+      tick: dora/timer/millis/100
+      random: rust-node/random
+    input_types:
+      random: std/core/v1/UInt64
+    outputs:
+      - status
+    output_types:
+      status: std/core/v1/String
+
+  - id: test-sink-random
+    path: <absolute>/target/debug/test-sink
+    inputs:
+      random: rust-node/random
+    args: "--output-file <absolute>/sink_random_output.json --record-mode"
+
+  - id: test-sink-status
+    path: <absolute>/target/debug/test-sink
+    inputs:
+      status: rust-status-node/status
+    args: "--output-file <absolute>/sink_status_output.json --record-mode"
