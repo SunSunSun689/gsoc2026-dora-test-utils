@@ -54,6 +54,14 @@ if [ ! -f dora/binaries/cli/Cargo.toml ]; then
     ok "dora cloned and checked out at 1fba721"
 else
     ok "dora source found"
+    PIN=$(git -C dora rev-parse --short HEAD 2>/dev/null || true)
+    if [ "$PIN" != "1fba721" ]; then
+        warn "dora checkout is at $PIN, expected pinned commit 1fba721 (flume→tokio mpsc, arrow 59)"
+        warn "Demo behavior is not guaranteed on a different dora commit."
+        warn "Re-clone, or checkout the pin: git -C dora checkout 1fba7214b79d8488229f6cc2027b9760dec4d6df"
+    else
+        ok "dora checkout verified at pinned commit 1fba721"
+    fi
 fi
 
 # ─── 1. Build everything ─────────────────────────────────

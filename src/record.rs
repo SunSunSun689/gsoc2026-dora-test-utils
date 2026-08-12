@@ -378,6 +378,9 @@ impl ReplaySession {
     ///
     /// Paths are matched against internal diff paths (e.g. `.count`, `.data[0]`).
     /// Both forms are accepted: `"count"` and `".count"` match the same field.
+    /// Calling this replaces the previously configured list — unlike
+    /// `ignore_sink`, which appends. Call once with all paths, or call again
+    /// to override the list.
     pub fn ignore_paths(mut self, paths: &[&str]) -> Self {
         self.ignore_paths = paths
             .iter()

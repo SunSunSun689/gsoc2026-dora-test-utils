@@ -93,11 +93,19 @@ fn dora_bin_path(name: &str) -> PathBuf {
 
 fn check_bin(label: &str, path: &Path) {
     if !path.exists() {
+        // DORA upstream nodes live in the dora workspace and are built with
+        // `-p <package> --manifest-path dora/Cargo.toml`; local binaries use
+        // `--bin` in the dora-test-utils workspace.
+        let build_hint = if label.starts_with("rust-dataflow-example-") {
+            format!("cargo build -p {label} --manifest-path dora/Cargo.toml")
+        } else {
+            format!("cargo build --bin {label}")
+        };
         eprintln!(
-            "ERROR: {} not found at {}\n  Build: cargo build --bin {}",
+            "ERROR: {} not found at {}\n  Build: {}",
             label,
             path.display(),
-            label,
+            build_hint,
         );
         std::process::exit(1);
     }
@@ -244,7 +252,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     );
     if let Some(random_data) = recording.sinks.get("test-sink-random") {
         if let Some(count) = random_data.get("count") {
-            println!("  random events:  {count} (exactly 100 — upstream rust-node caps its loop at 100 events)");
+            println!(
+                "  random events:  {count} (~100 — upstream rust-node caps its loop at 100 events)"
+            );
         }
     }
     if let Some(status_data) = recording.sinks.get("test-sink-status") {
@@ -258,7 +268,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // ── Step 2: Clean replay ───────────────────────────
     section("Step 2 — Replay (same YAML, no regression)");
 
-    step("Using ignore_paths(&[\"count\"]) — count is deterministic (exactly 100 in both runs)");
+    step("Using ignore_paths(&[\"count\"]) — count is deterministic (~100 in both runs)");
     step("ignore_paths is still exercised; regressions are caught via data.length, not masked");
     step("Using ignore_sink(\"test-sink-status\") to skip non-deterministic status output");
     let result = ReplaySession::load(&baseline_path)?
@@ -277,7 +287,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     section("Step 3 — Switch to mutated dataflow (rust-node tick: 10ms → 200ms)");
 
     step("At 200ms tick, only ~50 ticks arrive in the 10s window — under the 100-event loop cap");
-    step("→ ~50 random events instead of exactly 100 (upstream node exits after 100 events)");
+    step("→ ~50 random events instead of ~100 (upstream node exits after 100 events)");
     step("Same ignore_paths + ignore_sink filters applied");
     ok("mutated dataflow ready");
 
