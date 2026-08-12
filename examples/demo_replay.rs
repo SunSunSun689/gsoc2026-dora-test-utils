@@ -7,7 +7,7 @@
 //!
 //! Demonstrates:
 //!   - Non-invasive: DORA example nodes are NOT modified
-//!   - ignore_paths: skips .count field (timing jitter)
+//!   - ignore_paths: skips .count field (deterministic bookkeeping)
 //!   - ignore_sink: skips status-node output (non-deterministic)
 //!   - Regression detection: mutated tick rate → array length mismatch
 
@@ -212,7 +212,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let baseline_path = tmp_path.join("baseline.json");
 
     let baseline_yaml = generate_rust_dataflow_yaml(&tmp_path, 10, 100)?;
-    let mutated_yaml = generate_rust_dataflow_yaml(&tmp_path, 20, 100)?;
+    let mutated_yaml = generate_rust_dataflow_yaml(&tmp_path, 200, 100)?;
 
     let random_output = tmp_path.join("sink_random_output.json");
     let status_output = tmp_path.join("sink_status_output.json");
@@ -243,7 +243,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     );
     if let Some(random_data) = recording.sinks.get("test-sink-random") {
         if let Some(count) = random_data.get("count") {
-            println!("  random events:  {count} (expected ~1000 for 10ms tick, 10s)");
+            println!("  random events:  {count} (exactly 100 — upstream rust-node caps its loop at 100 events)");
         }
     }
     if let Some(status_data) = recording.sinks.get("test-sink-status") {
@@ -257,7 +257,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // ── Step 2: Clean replay ───────────────────────────
     section("Step 2 — Replay (same YAML, no regression)");
 
-    step("Using ignore_paths(&[\"count\"]) to tolerate ±1 timing jitter");
+    step("Using ignore_paths(&[\"count\"]) — count is deterministic (exactly 100 in both runs)");
+    step("ignore_paths is still exercised; regressions are caught via data.length, not masked");
     step("Using ignore_sink(\"test-sink-status\") to skip non-deterministic status output");
     let result = ReplaySession::load(&baseline_path)?
         .replay_sink("test-sink-random", &random_output)
@@ -272,9 +273,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     ok("assert_no_regression() — no panic");
 
     // ── Step 3: Mutated dataflow ───────────────────────
-    section("Step 3 — Switch to mutated dataflow (rust-node tick: 10ms → 20ms)");
+    section("Step 3 — Switch to mutated dataflow (rust-node tick: 10ms → 200ms)");
 
-    step("rust-node now runs at half speed → ~500 events instead of ~1000");
+    step("At 200ms tick, only ~50 ticks arrive in the 10s window — under the 100-event loop cap");
+    step("→ ~50 random events instead of exactly 100 (upstream node exits after 100 events)");
     step("Same ignore_paths + ignore_sink filters applied");
     ok("mutated dataflow ready");
 
@@ -322,7 +324,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("  How this helps the DORA community:");
     println!("    • DORA rust-dataflow example nodes are UNMODIFIED");
     println!("    • Only added: 2 test-sink nodes (2 YAML entries) for regression coverage");
-    println!("    • ignore_paths handles timing jitter (tick count ±1)");
+    println!("    • ignore_paths filters deterministic bookkeeping (event count) without masking data diffs");
     println!("    • ignore_sink handles non-deterministic output (debug strings)");
     println!("    • Any deterministic DORA dataflow can benefit from the same pattern");
     println!("    • Filtering makes Record/Replay practical for real pipelines");

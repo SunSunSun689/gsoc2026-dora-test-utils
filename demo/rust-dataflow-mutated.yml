@@ -1,7 +1,8 @@
 # dora-test-utils Record/Replay Demo -- MUTATED VARIANT
-# Same as rust-dataflow.yml, except rust-node's tick timer
-# is 20ms instead of 10ms (halves random output frequency to trigger
-# a regression in ReplaySession comparisons).
+# Same as rust-dataflow.yml, except rust-node's tick timer is 200ms
+# instead of 10ms: upstream rust-node caps its output loop at 100 events
+# (for i in 0..100), so only ~50 ticks arrive in the 10s window — a clear
+# array-length regression (50 vs 100) in ReplaySession comparisons.
 # Uses DORA's official rust-dataflow example nodes (unmodified)
 # with two test-sink nodes for recording outputs.
 #
@@ -14,7 +15,7 @@ nodes:
     build: cargo build -p rust-dataflow-example-node --manifest-path ../dora/Cargo.toml
     path: ../dora/target/debug/rust-dataflow-example-node
     inputs:
-      tick: dora/timer/millis/20
+      tick: dora/timer/millis/200
     outputs:
       - random
     output_types:
