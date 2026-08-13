@@ -109,6 +109,70 @@ fn generate_echo_yaml_with_sink_output(tmp: &Path) -> (PathBuf, PathBuf) {
     (yaml_path, sink_output)
 }
 
+fn generate_multi_echo_yaml(tmp: &Path) -> (PathBuf, PathBuf, PathBuf) {
+    // Two-output pipeline: test-source emits on data_a and data_b, each
+    // routed through its own echo node to a dedicated record-mode sink.
+    let source_file = tmp.join("source.json");
+    let sink_a_output = tmp.join("sink_a_output.json");
+    let sink_b_output = tmp.join("sink_b_output.json");
+    std::fs::write(
+        &source_file,
+        serde_json::to_string_pretty(&serde_json::json!({
+            "data": [42, 99, -1],
+            "data_type": "Int64"
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+
+    let source_bin = bin_path("test-source");
+    let echo_bin = bin_path("echo-node");
+    let sink_bin = bin_path("test-sink");
+
+    let yaml = format!(
+        r#"nodes:
+  - id: test-source
+    path: {source_bin}
+    args: "--output data_a:{source_file} --output data_b:{source_file}"
+    outputs:
+      - data_a
+      - data_b
+  - id: echo-a
+    path: {echo_bin}
+    inputs:
+      data_a: test-source/data_a
+    outputs:
+      - data_a
+  - id: echo-b
+    path: {echo_bin}
+    inputs:
+      data_b: test-source/data_b
+    outputs:
+      - data_b
+  - id: test-sink-a
+    path: {sink_bin}
+    inputs:
+      data_a: echo-a/data_a
+    args: "--output-file {sink_a_output} --record-mode"
+  - id: test-sink-b
+    path: {sink_bin}
+    inputs:
+      data_b: echo-b/data_b
+    args: "--output-file {sink_b_output} --record-mode"
+"#,
+        source_bin = source_bin.display(),
+        echo_bin = echo_bin.display(),
+        sink_bin = sink_bin.display(),
+        source_file = source_file.display(),
+        sink_a_output = sink_a_output.display(),
+        sink_b_output = sink_b_output.display(),
+    );
+
+    let yaml_path = tmp.join("multi-echo.yml");
+    std::fs::write(&yaml_path, yaml).unwrap();
+    (yaml_path, sink_a_output, sink_b_output)
+}
+
 // ── Tests ────────────────────────────────────────────────────────────
 
 #[test]
@@ -225,6 +289,86 @@ fn replay_regression_detected() {
     assert!(!result.is_clean());
     let diff = result.diff();
     assert!(!diff.regressions.is_empty());
+}
+
+#[test]
+#[serial]
+fn replay_regression_multi_echo_topology() {
+    // Regression detection on a different dataflow topology than the echo
+    // pipeline: two outputs, two echo nodes, two record-mode sinks. Verifies
+    // the Record/Replay tool is dataflow-agnostic — a mutation in the shared
+    // source data is detected independently in BOTH sinks.
+    if !dora_available() {
+        eprintln!("SKIP");
+        return;
+    }
+    build_binaries();
+
+    let tmp = tempfile::TempDir::new().unwrap();
+    let (yaml_path, sink_a_output, sink_b_output) = generate_multi_echo_yaml(tmp.path());
+
+    // Record baseline with [42, 99, -1].
+    let baseline = RecordSession::attach(&yaml_path)
+        .unwrap()
+        .record_sink("test-sink-a", &sink_a_output)
+        .record_sink("test-sink-b", &sink_b_output)
+        .with_timeout(std::time::Duration::from_secs(10))
+        .run()
+        .unwrap();
+    assert_eq!(baseline.sinks.len(), 2, "both sinks should be recorded");
+    let baseline_path = tmp.path().join("baseline.json");
+    baseline.save(&baseline_path).unwrap();
+
+    // Clean replay — same dataflow, no changes.
+    let clean = ReplaySession::load(&baseline_path)
+        .unwrap()
+        .replay_sink("test-sink-a", &sink_a_output)
+        .replay_sink("test-sink-b", &sink_b_output)
+        .with_timeout(std::time::Duration::from_secs(10))
+        .run()
+        .unwrap();
+    assert!(clean.is_clean(), "clean replay must be clean");
+
+    // Mutate the shared source: append a 4th element.
+    std::fs::write(
+        tmp.path().join("source.json"),
+        serde_json::to_string_pretty(&serde_json::json!({
+            "data": [42, 99, -1, 999],
+            "data_type": "Int64"
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+
+    // Replay — regression must be detected in BOTH sinks.
+    let result = ReplaySession::load(&baseline_path)
+        .unwrap()
+        .replay_sink("test-sink-a", &sink_a_output)
+        .replay_sink("test-sink-b", &sink_b_output)
+        .with_timeout(std::time::Duration::from_secs(10))
+        .run()
+        .unwrap();
+
+    assert!(!result.is_clean(), "mutation must be detected");
+    let mismatches: Vec<&SinkDiff> = result
+        .diff()
+        .regressions
+        .iter()
+        .filter(|r| r.status == DiffStatus::Mismatch)
+        .collect();
+    assert_eq!(
+        mismatches.len(),
+        2,
+        "both sinks should report a mismatch, got: {mismatches:?}"
+    );
+    for sink in &mismatches {
+        assert!(
+            sink.differences.iter().any(|d| d.path == ".count"),
+            "sink {} should report a .count diff, got: {:?}",
+            sink.sink_id,
+            sink.differences
+        );
+    }
 }
 
 #[test]
