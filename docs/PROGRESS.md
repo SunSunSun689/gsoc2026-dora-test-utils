@@ -21,6 +21,7 @@
 - `scripts/demo-final.sh` end-to-end ✅ (exit 0; regression detected: data.length 100→48)
 - **Generality check**: multi-echo dataflow (2 outputs + 2 echo nodes + 2 sinks) — regression detected in both sinks ✅ → added as e2e test `replay_regression_multi_echo_topology`
 - **Static YAML refactor (2026-08-13)**: demo now runs `demo/rust-dataflow.yml` directly — no runtime YAML generation (dora resolves relative paths against the YAML's own directory). Deleted ~60 lines of generation code + redundant `demo/rust-dataflow-baseline.yml`. Real users point at their own static YAML; the demo now shows exactly that pattern. Verified end-to-end ✅
+- **Three-layer demo (2026-08-13)**: `demo-final.sh` now showcases ALL testing layers — Layer 1 `harness_demo` (NodeHarness, no daemon), Layer 2 three integration pipelines (echo/multi-echo/classifier with expected-file comparison, fixture YAMLs fixed to YAML-dir-relative paths), Layer 3 Record/Replay. `demo/README.md` added. Verified end-to-end: exit 0, 116/116 tests ✅
 
 ### PR
 
