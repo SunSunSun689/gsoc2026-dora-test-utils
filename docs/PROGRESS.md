@@ -17,8 +17,9 @@
 - `cargo clippy --lib` ✅
 - `cargo test --lib` ✅ (85/85 pass)
 - `cargo test --test e2e_replay -- --test-threads=1` ✅ (12/12 pass)
-- Full suite: 115 tests (85 lib + 5 e2e + 4 e2e_record + 12 e2e_replay + 6 integration + 3 smoke)
+- Full suite: 116 tests (85 lib + 5 e2e + 4 e2e_record + 13 e2e_replay + 6 integration + 3 smoke)
 - `scripts/demo-final.sh` end-to-end ✅ (exit 0; regression detected: data.length 100→48)
+- **Generality check**: multi-echo dataflow (2 outputs + 2 echo nodes + 2 sinks) — regression detected in both sinks ✅ → added as e2e test `replay_regression_multi_echo_topology`
 
 ### PR
 
