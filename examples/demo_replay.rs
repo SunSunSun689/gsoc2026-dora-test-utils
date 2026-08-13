@@ -1,18 +1,23 @@
 //! dora-test-utils Demo — Record/Replay regression testing with DORA's
 //! official rust-dataflow example.
 //!
+//! Runs the static dataflow files in `demo/` — the same way a real user
+//! would point the tool at their own YAML:
+//!   - `demo/rust-dataflow.yml` — baseline (rust-node tick 10ms)
+//!   - `demo/rust-dataflow-mutated.yml` — mutated (rust-node tick 200ms)
+//!
 //! Records rust-node output (deterministic UInt64, seed=42) and status-node
-//! output (non-deterministic String) from a real DORA pipeline, then replays
-//! to detect regressions.
+//! output (non-deterministic String), then replays to detect regressions.
 //!
 //! Demonstrates:
 //!   - Non-invasive: DORA example nodes are NOT modified
 //!   - ignore_paths: skips .count field (deterministic bookkeeping)
 //!   - ignore_sink: skips status-node output (non-deterministic)
 //!   - Regression detection: mutated tick rate → array length mismatch
+//!
+//! Run from the repo root (demo-final.sh does this automatically).
 
 use dora_test_utils::record::{RecordSession, ReplaySession};
-use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::Duration;
@@ -65,52 +70,6 @@ fn resolve_dora(args: &Args) -> Option<PathBuf> {
         .map(|_| PathBuf::from("dora"))
 }
 
-fn bin_path(name: &str) -> PathBuf {
-    let profile = if cfg!(debug_assertions) {
-        "debug"
-    } else {
-        "release"
-    };
-    std::env::current_dir()
-        .unwrap_or_else(|_| PathBuf::from("."))
-        .join("target")
-        .join(profile)
-        .join(name)
-}
-
-fn dora_bin_path(name: &str) -> PathBuf {
-    let profile = if cfg!(debug_assertions) {
-        "debug"
-    } else {
-        "release"
-    };
-    std::env::current_dir()
-        .unwrap_or_else(|_| PathBuf::from("."))
-        .join("dora/target")
-        .join(profile)
-        .join(name)
-}
-
-fn check_bin(label: &str, path: &Path) {
-    if !path.exists() {
-        // DORA upstream nodes live in the dora workspace and are built with
-        // `-p <package> --manifest-path dora/Cargo.toml`; local binaries use
-        // `--bin` in the dora-test-utils workspace.
-        let build_hint = if label.starts_with("rust-dataflow-example-") {
-            format!("cargo build -p {label} --manifest-path dora/Cargo.toml")
-        } else {
-            format!("cargo build --bin {label}")
-        };
-        eprintln!(
-            "ERROR: {} not found at {}\n  Build: {}",
-            label,
-            path.display(),
-            build_hint,
-        );
-        std::process::exit(1);
-    }
-}
-
 fn section(title: &str) {
     println!("\n═══ {} ═══\n", title);
 }
@@ -125,67 +84,6 @@ fn fail(msg: &str) -> ! {
     std::process::exit(1);
 }
 
-/// Generate a temp YAML for the rust-dataflow pipeline with absolute paths.
-fn generate_rust_dataflow_yaml(
-    tmp: &Path,
-    name: &str,
-    rust_node_tick_ms: u64,
-    rust_status_node_tick_ms: u64,
-) -> Result<PathBuf, Box<dyn std::error::Error>> {
-    let rust_node_bin = dora_bin_path("rust-dataflow-example-node");
-    let status_node_bin = dora_bin_path("rust-dataflow-example-status-node");
-    let test_sink_bin = bin_path("test-sink");
-    let random_output = tmp.join("sink_random_output.json");
-    let status_output = tmp.join("sink_status_output.json");
-
-    check_bin("rust-dataflow-example-node", &rust_node_bin);
-    check_bin("rust-dataflow-example-status-node", &status_node_bin);
-    check_bin("test-sink", &test_sink_bin);
-
-    let yaml = format!(
-        r#"nodes:
-  - id: rust-node
-    path: {rust_node_bin}
-    inputs:
-      tick: dora/timer/millis/{rust_node_tick_ms}
-    outputs:
-      - random
-
-  - id: rust-status-node
-    path: {status_node_bin}
-    inputs:
-      tick: dora/timer/millis/{rust_status_node_tick_ms}
-      random: rust-node/random
-    outputs:
-      - status
-
-  - id: test-sink-random
-    path: {test_sink_bin}
-    inputs:
-      random: rust-node/random
-    args: "--output-file {random_output} --record-mode"
-
-  - id: test-sink-status
-    path: {test_sink_bin}
-    inputs:
-      status: rust-status-node/status
-    args: "--output-file {status_output} --record-mode"
-"#,
-        rust_node_bin = rust_node_bin.display(),
-        status_node_bin = status_node_bin.display(),
-        test_sink_bin = test_sink_bin.display(),
-        random_output = random_output.display(),
-        status_output = status_output.display(),
-        rust_node_tick_ms = rust_node_tick_ms,
-        rust_status_node_tick_ms = rust_status_node_tick_ms,
-    );
-
-    let yaml_path = tmp.join(name);
-    let mut f = std::fs::File::create(&yaml_path)?;
-    f.write_all(yaml.as_bytes())?;
-    Ok(yaml_path)
-}
-
 // ── Main ───────────────────────────────────────────────────
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -193,6 +91,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     section("dora-test-utils — Record/Replay Demo");
     println!("  DORA rust-dataflow example (unmodified upstream nodes)");
+    println!("  Static dataflow files under demo/ — no YAML generation");
     println!("  Demonstrates ignore_paths + ignore_sink filtering");
     println!();
 
@@ -220,11 +119,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let tmp_path = tmp.into_path();
     let baseline_path = tmp_path.join("baseline.json");
 
-    let baseline_yaml = generate_rust_dataflow_yaml(&tmp_path, "baseline.yml", 10, 100)?;
-    let mutated_yaml = generate_rust_dataflow_yaml(&tmp_path, "mutated.yml", 200, 100)?;
+    // Static dataflow files. dora resolves their relative paths against
+    // the YAML file's own directory, so no generation is needed.
+    let baseline_yaml = PathBuf::from("demo/rust-dataflow.yml");
+    let mutated_yaml = PathBuf::from("demo/rust-dataflow-mutated.yml");
 
-    let random_output = tmp_path.join("sink_random_output.json");
-    let status_output = tmp_path.join("sink_status_output.json");
+    // Output paths must match the test-sink args in the static YAMLs.
+    let random_output = PathBuf::from("demo/sink_random_output.json");
+    let status_output = PathBuf::from("demo/sink_status_output.json");
 
     // ── Step 1: Record baseline ────────────────────────
     section("Step 1 — Record baseline");
@@ -286,6 +188,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // ── Step 3: Mutated dataflow ───────────────────────
     section("Step 3 — Switch to mutated dataflow (rust-node tick: 10ms → 200ms)");
 
+    step(&format!("Dataflow: {}", mutated_yaml.display()));
     step("At 200ms tick, only ~50 ticks arrive in the 10s window — under the 100-event loop cap");
     step("→ ~50 random events instead of ~100 (upstream node exits after 100 events)");
     step("Same ignore_paths + ignore_sink filters applied");
@@ -335,9 +238,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("  How this helps the DORA community:");
     println!("    • DORA rust-dataflow example nodes are UNMODIFIED");
     println!("    • Only added: 2 test-sink nodes (2 YAML entries) for regression coverage");
+    println!("    • Static YAML files — exactly how you'd use the tool on your own dataflow");
     println!("    • ignore_paths filters deterministic bookkeeping (event count) without masking data diffs");
     println!("    • ignore_sink handles non-deterministic output (debug strings)");
-    println!("    • Any deterministic DORA dataflow can benefit from the same pattern");
     println!("    • Filtering makes Record/Replay practical for real pipelines");
 
     Ok(())

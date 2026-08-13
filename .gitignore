@@ -19,5 +19,6 @@ result.json
 tests/fixtures/out/
 demo/out/
 demo/sink_output.json
+demo/sink_*.json
 *.dora-session.yaml
 docs/

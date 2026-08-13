@@ -1,4 +1,7 @@
 # dora-test-utils Record/Replay Demo -- MUTATED VARIANT
+# This is THE file the demo runs for the regression step
+# (examples/demo_replay.rs Step 3-4, via ReplaySession::dataflow()).
+#
 # Same as rust-dataflow.yml, except rust-node's tick timer is 200ms
 # instead of 10ms: upstream rust-node caps its output loop at 100 events
 # (for i in 0..100), so only ~50 ticks arrive in the 10s window — a clear
