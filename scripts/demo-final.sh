@@ -8,7 +8,7 @@
 #   3. Mutate the dataflow (rust-node tick 10ms → 200ms)
 #   4. Replay → detect regression with structured diff report
 #
-# Also runs the full test suite (115 tests).
+# Also runs the full test suite (116 tests).
 # ─────────────────────────────────────────────────────────────
 set -euo pipefail
 
@@ -149,12 +149,12 @@ step "Running cargo test --test e2e..."
 cargo test --test e2e -- --test-threads=1
 
 # ─── 5. Record/Replay E2E tests ──────────────────────────
-banner "5. Record/Replay e2e tests (16)"
+banner "5. Record/Replay e2e tests (17)"
 
 step "Running e2e_record tests (4)..."
 timeout 120 cargo test --test e2e_record -- --test-threads=1
 
-step "Running e2e_replay tests (12)..."
+step "Running e2e_replay tests (13)..."
 timeout 120 cargo test --test e2e_replay -- --test-threads=1
 
 # ─── 6. Integration tests ────────────────────────────────
@@ -178,7 +178,7 @@ echo "  • Demo uses rust-dataflow-example-node + rust-dataflow-example-status-
 echo "  • Sinks recorded: test-sink-random (UInt64) + test-sink-status (String)"
 echo "  • ReplaySession (clean): ignore_paths([count]) + ignore_sink(status) → is_clean() = true"
 echo "  • ReplaySession (regression): tick 10ms → 200ms → array length mismatch → DiffReport"
-echo "  • Full suite: 115 tests green (85 unit + 5 e2e + 4 record + 12 replay + 6 integration + 3 smoke)"
+echo "  • Full suite: 116 tests green (85 unit + 5 e2e + 4 record + 13 replay + 6 integration + 3 smoke)"
 echo ""
 echo -e "${CYAN}Repo:${NC} https://github.com/SunSunSun689/gsoc2026-dora-test-utils"
 echo -e "${CYAN}Branch:${NC} week11"
