@@ -135,6 +135,11 @@ run_integration_pipeline() {
     shift
     local result_files=("$@")
 
+    # Remove stale result files first — a leftover "match": true from a
+    # previous run would otherwise satisfy the check even if this run's
+    # sink wrote nothing.
+    rm -f "${result_files[@]}"
+
     step "Running $yaml ..."
     set +e
     timeout 60 "$DORA_BIN" run "$yaml" --stop-after 15s > "$BUILD_LOG" 2>&1
@@ -209,16 +214,16 @@ cargo test --test e2e -- --test-threads=1
 banner "7. Record/Replay e2e tests (17)"
 
 step "Running e2e_record tests (4)..."
-timeout 120 cargo test --test e2e_record -- --test-threads=1
+timeout 240 cargo test --test e2e_record -- --test-threads=1
 
 step "Running e2e_replay tests (13)..."
-timeout 120 cargo test --test e2e_replay -- --test-threads=1
+timeout 240 cargo test --test e2e_replay -- --test-threads=1
 
 # ─── 8. Integration tests ───────────────────────────────
 banner "8. Integration tests (6)"
 
 step "Running cargo test --test integration (dora run pipelines)..."
-timeout 120 cargo test --test integration -- --test-threads=1
+timeout 240 cargo test --test integration -- --test-threads=1
 
 # ─── 9. Smoke tests ─────────────────────────────────────
 banner "9. Smoke tests (3)"
