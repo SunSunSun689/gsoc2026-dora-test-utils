@@ -317,6 +317,21 @@ pub fn compare_semantic(
                 // comparing.  Float types preserve fractional parts,
                 // so prefer them over integers to avoid silent
                 // truncation (e.g. Float64(1.7) ≠ Int32(1)).
+                //
+                // Precision guard: widening an integer to a float is lossy
+                // above 2^53 (Float64) / 2^24 (Float32).  If the cast
+                // doesn't round-trip, the comparison is inconclusive —
+                // report a mismatch rather than a false match.
+                let lossless = |a: &arrow::array::ArrayRef, t: &arrow::datatypes::DataType| {
+                    let fwd = arrow::compute::cast(a, t).ok();
+                    let back = fwd
+                        .as_ref()
+                        .and_then(|v| arrow::compute::cast(v, a.data_type()).ok());
+                    match back {
+                        Some(b) => b.as_ref() == a.as_ref(),
+                        None => false,
+                    }
+                };
                 let matches = if e.data_type() == r.data_type() {
                     e == r
                 } else {
@@ -334,7 +349,11 @@ pub fn compare_semantic(
                     let cast_e = arrow::compute::cast(e, &target);
                     let cast_r = arrow::compute::cast(r, &target);
                     match (cast_e, cast_r) {
-                        (Ok(ce), Ok(cr)) => ce.as_ref() == cr.as_ref(),
+                        (Ok(ce), Ok(cr)) => {
+                            lossless(e, &target)
+                                && lossless(r, &target)
+                                && ce.as_ref() == cr.as_ref()
+                        }
                         _ => false,
                     }
                 };
@@ -567,6 +586,43 @@ mod tests {
         assert!(
             result.r#match,
             "semantic comparison should tolerate Float32 expected vs Float64 received"
+        );
+    }
+
+    #[test]
+    fn test_compare_semantic_int64_vs_float64_precision_guard() {
+        // Int64 values above 2^53 cannot be represented in Float64 — the
+        // precision guard must report a mismatch instead of a false match
+        // after both sides round to the same f64.
+        let v1 = serde_json::json!(9007199254740993i64); // 2^53 + 1
+        let expected: Vec<&serde_json::Value> = vec![&v1];
+        let received: Vec<arrow::array::ArrayRef> =
+            vec![Arc::new(arrow::array::Float64Array::from(vec![
+                9007199254740994.0, // 2^53 + 2 — distinct value
+            ]))];
+        let result = compare_semantic(
+            &expected,
+            &received,
+            Some(&arrow::datatypes::DataType::Int64),
+        );
+        assert!(
+            !result.r#match,
+            "lossy Int64→Float64 cast must not false-match; got {result:#?}"
+        );
+
+        // Small integers must still match across Int64/Float64.
+        let v2 = serde_json::json!(42i64);
+        let expected: Vec<&serde_json::Value> = vec![&v2];
+        let received: Vec<arrow::array::ArrayRef> =
+            vec![Arc::new(arrow::array::Float64Array::from(vec![42.0]))];
+        let result = compare_semantic(
+            &expected,
+            &received,
+            Some(&arrow::datatypes::DataType::Int64),
+        );
+        assert!(
+            result.r#match,
+            "small Int64 vs Float64 must still match; got {result:#?}"
         );
     }
 
