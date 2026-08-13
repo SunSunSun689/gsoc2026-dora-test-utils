@@ -22,6 +22,12 @@
 - **Generality check**: multi-echo dataflow (2 outputs + 2 echo nodes + 2 sinks) — regression detected in both sinks ✅ → added as e2e test `replay_regression_multi_echo_topology`
 - **Static YAML refactor (2026-08-13)**: demo now runs `demo/rust-dataflow.yml` directly — no runtime YAML generation (dora resolves relative paths against the YAML's own directory). Deleted ~60 lines of generation code + redundant `demo/rust-dataflow-baseline.yml`. Real users point at their own static YAML; the demo now shows exactly that pattern. Verified end-to-end ✅
 - **Three-layer demo (2026-08-13)**: `demo-final.sh` now showcases ALL testing layers — Layer 1 `harness_demo` (NodeHarness, no daemon), Layer 2 three integration pipelines (echo/multi-echo/classifier with expected-file comparison, fixture YAMLs fixed to YAML-dir-relative paths), Layer 3 Record/Replay. `demo/README.md` added. Verified end-to-end: exit 0, 116/116 tests ✅
+- **Code review fixes (2026-08-13)**: `/code-review` found 15 findings (24 confirmed). Fixed in 4 commits:
+  - `fa427b2` — comparison false negatives: exact large-integer comparison (f64 2^53 rounding), length-mismatch no longer hides prefix value diffs, Float64-widening round-trip precision guard, `.data_type` Int32→Int64 tolerance, zero-event warning
+  - `c1c971d` — harness/mock: panic on post-init dropped events, unbounded MockOutputSender channel, removed broken `Default` impl
+  - `b8b1449` — demo/CI: clean-replay `data.length` jitter tolerance, stale result-file cleanup, timeouts 120→240 + CI `timeout-minutes: 30`
+  - ignore semantics: `ignore_sink` no longer validated/crashes, `ignore_paths` covers `data[i]` descendants, RecordSession backup-restore (.bak) on failed runs
+  - Test counts: 91 lib / **122 total**. Demo end-to-end verified (exit 0, no .bak residue)
 
 ### PR
 
