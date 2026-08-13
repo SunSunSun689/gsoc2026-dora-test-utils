@@ -2,6 +2,7 @@
 # This is THE file the demo runs (examples/demo_replay.rs Step 1-2).
 # Uses DORA's official rust-dataflow example nodes (unmodified)
 # with two test-sink nodes for recording outputs.
+# See demo/README.md for the full pipeline explanation.
 #
 # Relative paths resolve against this file's directory (dora behavior),
 # so it works as-is: dora run demo/rust-dataflow.yml --stop-after 10s
