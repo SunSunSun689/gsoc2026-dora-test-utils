@@ -18,6 +18,12 @@
 - `cargo test --lib` ✅ (85/85 pass)
 - `cargo test --test e2e_replay -- --test-threads=1` ✅ (12/12 pass)
 - Full suite: 115 tests (85 lib + 5 e2e + 4 e2e_record + 12 e2e_replay + 6 integration + 3 smoke)
+- `scripts/demo-final.sh` end-to-end ✅ (exit 0; regression detected: data.length 100→48)
+
+### PR
+
+- **[PR #44](https://github.com/dora-rs/gsoc2026-dora-test-utils/pull/44)** opened against `main` (2026-08-13)
+- 13 commits: filtering feature + unit/e2e tests + demo rewrite + script + polish
 
 ## Week 11 后半 (2026-08-10): Demo bug fix — 3 bugs in demo_replay.rs
 
