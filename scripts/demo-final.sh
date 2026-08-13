@@ -2,11 +2,12 @@
 # ─────────────────────────────────────────────────────────────
 # dora-test-utils — Final Submission Demo
 # ─────────────────────────────────────────────────────────────
-# Showcases RecordSession → ReplaySession regression testing:
-#   1. Record a baseline from DORA's rust-dataflow example (upstream nodes unmodified)
-#   2. Replay → verify no regression (clean; ignore_paths + ignore_sink)
-#   3. Mutate the dataflow (rust-node tick 10ms → 200ms)
-#   4. Replay → detect regression with structured diff report
+# Showcases all three testing layers:
+#   Layer 1: NodeHarness — unit-test a single node, no daemon
+#   Layer 2: TestSource/TestSink — integration testing via real
+#            dataflow YAMLs (echo, multi-echo, classifier)
+#   Layer 3: Record/Replay — regression testing on DORA's
+#            rust-dataflow example (upstream nodes unmodified)
 #
 # Also runs the full test suite (116 tests).
 # ─────────────────────────────────────────────────────────────
@@ -97,22 +98,78 @@ else
     exit 1
 fi
 
-step "Build demo_replay example..."
-if cargo build --example demo_replay > "$BUILD_LOG" 2>&1; then
+step "Build demo examples (harness_demo + demo_replay)..."
+if cargo build --example harness_demo --example demo_replay > "$BUILD_LOG" 2>&1; then
     tail -1 "$BUILD_LOG"
 else
-    warn "demo_replay build failed! Last 20 lines:"
+    warn "demo build failed! Last 20 lines:"
     tail -20 "$BUILD_LOG"
     exit 1
 fi
-
-# ─── 2. Record/Replay demo ───────────────────────────────
-banner "2. Record/Replay regression testing demo"
 
 DORA_BIN="dora/target/debug/dora"
 if [ ! -f "$DORA_BIN" ]; then
     DORA_BIN="dora/target/release/dora"
 fi
+
+# ─── 2. Layer 1: NodeHarness (unit testing) ─────────────
+banner "2. Layer 1 — NodeHarness demo (unit testing, no daemon)"
+
+HARNESS_DEMO="target/debug/examples/harness_demo"
+if [ -f "$HARNESS_DEMO" ]; then
+    step "Running harness_demo..."
+    "$HARNESS_DEMO"
+else
+    warn "$HARNESS_DEMO not found"
+    exit 1
+fi
+
+# ─── 3. Layer 2: Integration testing ────────────────────
+banner "3. Layer 2 — Integration testing (test-source → node → test-sink)"
+
+# Run each fixture pipeline and check the test-sink comparison result.
+# Fixture args are relative to the YAML's directory (dora spawns nodes
+# there), so the static files work as-is from the repo root.
+run_integration_pipeline() {
+    local yaml="$1"
+    shift
+    local result_files=("$@")
+
+    step "Running $yaml ..."
+    set +e
+    timeout 60 "$DORA_BIN" run "$yaml" --stop-after 15s > "$BUILD_LOG" 2>&1
+    local dora_exit=$?
+    set -e
+    if [ $dora_exit -ne 0 ]; then
+        warn "dora run failed (exit $dora_exit). Last 10 log lines:"
+        tail -10 "$BUILD_LOG"
+        exit 1
+    fi
+
+    for rf in "${result_files[@]}"; do
+        if [ -f "$rf" ] && grep -q '"match": true' "$rf"; then
+            ok "$rf — MATCH (test-sink compared against expected file)"
+        else
+            warn "$rf — MISMATCH or missing:"
+            cat "$rf" 2>/dev/null || echo "(file not found)"
+            exit 1
+        fi
+    done
+}
+
+step "Pipeline 1/3: echo (test-source → echo-node → test-sink)"
+run_integration_pipeline "tests/fixtures/echo-dataflow.yml" "tests/fixtures/result.json"
+
+step "Pipeline 2/3: multi-echo (two outputs, two sinks)"
+run_integration_pipeline "tests/fixtures/multi-echo-dataflow.yml" \
+    "tests/fixtures/result-a.json" "tests/fixtures/result-b.json"
+
+step "Pipeline 3/3: classifier (threshold split → high/low sinks)"
+run_integration_pipeline "tests/fixtures/classifier-dataflow.yml" \
+    "tests/fixtures/result-high.json" "tests/fixtures/result-low.json"
+
+# ─── 4. Layer 3: Record/Replay demo ─────────────────────
+banner "4. Layer 3 — Record/Replay regression testing demo"
 
 DEMO="target/debug/examples/demo_replay"
 if [ -f "$DEMO" ]; then
@@ -136,20 +193,20 @@ else
     exit 1
 fi
 
-# ─── 3. Library unit tests ───────────────────────────────
-banner "3. Library unit tests (85)"
+# ─── 5. Library unit tests ──────────────────────────────
+banner "5. Library unit tests (85)"
 
 step "Running cargo test --lib..."
 cargo test --lib
 
-# ─── 4. E2E tests ────────────────────────────────────────
-banner "4. E2E tests (5)"
+# ─── 6. E2E tests ───────────────────────────────────────
+banner "6. E2E tests (5)"
 
 step "Running cargo test --test e2e..."
 cargo test --test e2e -- --test-threads=1
 
-# ─── 5. Record/Replay E2E tests ──────────────────────────
-banner "5. Record/Replay e2e tests (17)"
+# ─── 7. Record/Replay E2E tests ─────────────────────────
+banner "7. Record/Replay e2e tests (17)"
 
 step "Running e2e_record tests (4)..."
 timeout 120 cargo test --test e2e_record -- --test-threads=1
@@ -157,14 +214,14 @@ timeout 120 cargo test --test e2e_record -- --test-threads=1
 step "Running e2e_replay tests (13)..."
 timeout 120 cargo test --test e2e_replay -- --test-threads=1
 
-# ─── 6. Integration tests ────────────────────────────────
-banner "6. Integration tests (6)"
+# ─── 8. Integration tests ───────────────────────────────
+banner "8. Integration tests (6)"
 
 step "Running cargo test --test integration (dora run pipelines)..."
 timeout 120 cargo test --test integration -- --test-threads=1
 
-# ─── 7. Smoke tests ──────────────────────────────────────
-banner "7. Smoke tests (3)"
+# ─── 9. Smoke tests ─────────────────────────────────────
+banner "9. Smoke tests (3)"
 
 step "Running cargo test --test smoke..."
 cargo test --test smoke -- --test-threads=1
@@ -173,10 +230,10 @@ cargo test --test smoke -- --test-threads=1
 banner "Demo Complete"
 
 echo -e "${GREEN}${BOLD}Summary:${NC}"
-echo "  • RecordSession: baseline from DORA rust-dataflow example (upstream nodes unmodified)"
-echo "  • Demo uses rust-dataflow-example-node + rust-dataflow-example-status-node → 2 test-sink nodes"
-echo "  • Sinks recorded: test-sink-random (UInt64) + test-sink-status (String)"
-echo "  • ReplaySession (clean): ignore_paths([count]) + ignore_sink(status) → is_clean() = true"
+echo "  • Layer 1 (NodeHarness):      unit testing without daemon — harness_demo"
+echo "  • Layer 2 (TestSource/Sink):  3 pipelines with expected-file comparison"
+echo "  • Layer 3 (Record/Replay):    rust-dataflow example, upstream nodes unmodified"
+echo "  • ReplaySession (clean):      ignore_paths([count]) + ignore_sink(status) → is_clean() = true"
 echo "  • ReplaySession (regression): tick 10ms → 200ms → array length mismatch → DiffReport"
 echo "  • Full suite: 116 tests green (85 unit + 5 e2e + 4 record + 13 replay + 6 integration + 3 smoke)"
 echo ""

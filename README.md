@@ -130,7 +130,7 @@ cargo build --bin test-source --bin test-sink --bin echo-node --bin classifier-n
 ### 跑测试
 
 ```bash
-# 库单元测试（80 个）
+# 库单元测试（85 个）
 cargo test --lib
 
 # 端到端测试（5 个）
@@ -139,7 +139,7 @@ cargo test --test e2e
 # Record e2e 测试（4 个，需要 dora CLI）
 cargo test --test e2e_record -- --test-threads=1
 
-# Replay e2e 测试（11 个，需要 dora CLI）
+# Replay e2e 测试（13 个，需要 dora CLI）
 cargo test --test e2e_replay -- --test-threads=1
 
 # 集成测试（6 个，需要 dora CLI）
@@ -155,10 +155,16 @@ cargo test
 ### 演示脚本
 
 ```bash
-bash scripts/demo-week12.sh
+bash scripts/demo-final.sh
 ```
 
-一键展示：RecordSession 录制基线 → ReplaySession 验证无回归 → 制造变更 → 检测到回归。
+一键展示全部三层测试能力：
+
+1. **Layer 1** — `examples/harness_demo.rs`：NodeHarness 单元测试，不起 daemon，注入输入 → 驱动事件 → 捕获输出 → 断言
+2. **Layer 2** — 三条真实 dataflow 流水线（echo / multi-echo / classifier），test-source 喂数据，test-sink 跟预期文件比对
+3. **Layer 3** — `examples/demo_replay.rs`：DORA 官方 rust-dataflow example（上游节点零修改），RecordSession 录制基线 → ReplaySession 检测回归
+
+脚本自动 clone dora（pin 到 `1fba721`）、构建全部二进制、跑三个 demo、再跑完整 116 测试套件。
 
 ## 项目结构
 
@@ -176,11 +182,11 @@ src/
     ├── test-sink.rs      # test-sink CLI
     └── classifier_node.rs # classifier-node CLI
 tests/
-├── fixtures/       # YAML dataflow、测试数据文件
+├── fixtures/       # YAML dataflow、测试数据文件（静态可直接 dora run）
 ├── echo-node.rs    # echo-node 二进制（透传）
 ├── e2e.rs          # NodeHarness 端到端测试 (5)
 ├── e2e_record.rs   # RecordSession e2e 测试 (4)
-├── e2e_replay.rs   # ReplaySession e2e 测试 (11)
+├── e2e_replay.rs   # ReplaySession e2e 测试 (13)
 ├── integration.rs  # 集成测试 (6)
 └── smoke.rs        # 冒烟测试 (3)
 docs/               # 设计文档、进度记录、upstream PR 计划
@@ -199,17 +205,17 @@ scripts/            # Demo 脚本
 | `ReplaySession` / `ReplayResult` | **Experimental** | 重放比对，检测回归 |
 | `DiffReport` / `SinkDiff` / `FieldDiff` | **Experimental** | 结构化差异报告 |
 
-## 测试统计（Week 11）
+## 测试统计（Week 12）
 
 | 类别 | 数量 | 位置 |
 |------|------|------|
-| 库单元测试 | 80 | `src/*.rs` |
+| 库单元测试 | 85 | `src/*.rs` |
 | 端到端测试 (e2e) | 5 | `tests/e2e.rs` |
 | Record e2e (e2e_record) | 4 | `tests/e2e_record.rs` |
-| Replay e2e (e2e_replay) | 11 | `tests/e2e_replay.rs` |
+| Replay e2e (e2e_replay) | 13 | `tests/e2e_replay.rs` |
 | 集成测试 | 6 | `tests/integration.rs` |
 | 冒烟测试 | 3 | `tests/smoke.rs` |
-| **总计** | **109** | |
+| **总计** | **116** | |
 
 ## CI
 

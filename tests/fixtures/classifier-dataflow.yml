@@ -4,13 +4,14 @@
 # into "high" and "low" outputs → two test-sink instances compare against
 # expected high/low values.
 #
-# Usage:
+# Node args are relative to this file's directory (dora spawns nodes
+# there), so the file works as-is:
 #   dora run tests/fixtures/classifier-dataflow.yml --stop-after 15s
 
 nodes:
   - id: test-source
     path: ../../target/debug/test-source
-    args: "--output raw-data:tests/fixtures/classifier-source.json"
+    args: "--output raw-data:classifier-source.json"
     outputs:
       - raw-data
 
@@ -26,10 +27,10 @@ nodes:
     path: ../../target/debug/test-sink
     inputs:
       high: classifier/high
-    args: "--expected-file tests/fixtures/classifier-expected-high.json --output-file result-high.json"
+    args: "--expected-file classifier-expected-high.json --output-file result-high.json"
 
   - id: test-sink-low
     path: ../../target/debug/test-sink
     inputs:
       low: classifier/low
-    args: "--expected-file tests/fixtures/classifier-expected-low.json --output-file result-low.json"
+    args: "--expected-file classifier-expected-low.json --output-file result-low.json"

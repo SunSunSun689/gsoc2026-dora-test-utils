@@ -3,11 +3,15 @@
 #
 # Verifies multi-output support in test-source and proper routing
 # in multi-node dataflows.
+#
+# Node args are relative to this file's directory (dora spawns nodes
+# there), so the file works as-is:
+#   dora run tests/fixtures/multi-echo-dataflow.yml --stop-after 15s
 
 nodes:
   - id: test-source
     path: ../../target/debug/test-source
-    args: "--output data_a:tests/fixtures/source-data.json --output data_b:tests/fixtures/classifier-source.json"
+    args: "--output data_a:source-data.json --output data_b:classifier-source.json"
     outputs:
       - data_a
       - data_b
@@ -30,10 +34,10 @@ nodes:
     path: ../../target/debug/test-sink
     inputs:
       data_a: echo-a/data_a
-    args: "--expected-file tests/fixtures/expected-output.json --output-file result-a.json"
+    args: "--expected-file expected-output.json --output-file result-a.json"
 
   - id: test-sink-b
     path: ../../target/debug/test-sink
     inputs:
       data_b: echo-b/data_b
-    args: "--expected-file tests/fixtures/classifier-source-expected.json --output-file result-b.json"
+    args: "--expected-file classifier-source-expected.json --output-file result-b.json"
