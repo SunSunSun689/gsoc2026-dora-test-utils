@@ -334,16 +334,17 @@ impl NodeHarness {
     fn ensure_init(&mut self) {
         if self.node.is_some() {
             // Node already initialized — buffered events can never reach it.
-            if !self.pending_events.is_empty() {
-                // Warn: these events will never be delivered.  The node was
-                // already created and its TestingInput consumed atomically.
-                eprintln!(
-                    "NodeHarness: {} buffered event(s) dropped — node already \
-                     initialized.  Call send_data/send_stop BEFORE the first \
-                     tick/run_to_completion/send_output.",
-                    self.pending_events.len()
-                );
-            }
+            // Panic instead of dropping silently: a test that injects input
+            // after the first tick would otherwise run against LESS data
+            // than the author wrote and still report green.
+            assert!(
+                self.pending_events.is_empty(),
+                "NodeHarness: {} event(s) injected after the node was already \
+                 initialized — they can never be delivered.  Call \
+                 send_data/send_stop BEFORE the first \
+                 tick/run_to_completion/send_output.",
+                self.pending_events.len()
+            );
             self.pending_events.clear();
             return;
         }
@@ -435,19 +436,17 @@ mod tests {
     }
 
     #[test]
-    fn test_post_init_send_data_cleared() {
-        // After tick() initializes the node, any new send_data() calls
-        // buffer events that can never be delivered (TestingInput consumed).
-        // ensure_init clears them — verify this doesn't panic or loop.
+    #[should_panic(expected = "injected after the node was already")]
+    fn test_post_init_send_data_panics() {
+        // After tick() initializes the node, send_data() must panic —
+        // the events could never be delivered, and a silent drop would
+        // let a test run against less data than the author wrote while
+        // still reporting green.
         let mut harness = NodeHarness::new().expect("harness should be created");
         harness.send_data("first", serde_json::json!([1]));
         harness.tick(); // node init happens here
-                        // This event goes to pending_events but will be cleared on next ensure_init
         harness.send_data("second", serde_json::json!([2]));
-        harness.tick(); // should clear pending_events, not panic
-                        // Stream is exhausted — tick returns None
-        let event = harness.tick();
-        assert!(event.is_none(), "stream should be exhausted");
+        harness.tick(); // must panic here
     }
 
     #[test]
