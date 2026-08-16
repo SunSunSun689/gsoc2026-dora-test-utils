@@ -77,10 +77,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     ok("prerequisites: dora CLI resolved by RecordSession/ReplaySession");
 
     // ── Setup ──────────────────────────────────────────
-    let tmp = tempfile::TempDir::new()?;
-    #[allow(deprecated)]
-    let tmp_path = tmp.into_path();
-    let baseline_path = tmp_path.join("baseline.json");
+    // The baseline lives IN THE PROJECT and is committed to the repo —
+    // the real regression workflow records once, commits the baseline,
+    // and CI replays against the committed copy.  The trajectory output
+    // is deterministic, so re-recording produces identical content and
+    // the committed file never churns.
+    let baseline_path = PathBuf::from("demo/trajectory-baseline.json");
 
     // Static dataflow files. dora resolves their relative paths against
     // the YAML file's own directory, so no generation is needed.
@@ -102,8 +104,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .with_timeout(Duration::from_secs(10))
         .run()?;
 
+    // Normalize machine-specific metadata before committing the
+    // baseline: the dataflow path is stored repo-relative so the
+    // committed file works from any checkout location.
+    let mut recording = recording;
+    recording.metadata.dataflow_yaml = "demo/trajectory-baseline.yml".into();
     recording.save(&baseline_path)?;
-    ok(&format!("baseline saved → {}", baseline_path.display()));
+    ok(&format!(
+        "baseline saved → {} (committed to the repo — CI replays against it)",
+        baseline_path.display()
+    ));
 
     // Show recorded data sample
     println!();
@@ -138,6 +148,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     step("ignore_paths / ignore_sink to skip non-deterministic fields.");
     let result = ReplaySession::load(&baseline_path)?
         .replay_sink("test-sink", &sink_output)
+        .dataflow(&baseline_yaml)
         .with_timeout(Duration::from_secs(10))
         .run()?;
 

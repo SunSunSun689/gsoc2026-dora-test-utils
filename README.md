@@ -86,7 +86,7 @@ All demos share one theme — a **Realman GEN72 7-axis robot arm** — and each 
 |------|-------------|---------------|
 | Unit testing | `cargo run --example harness_demo` | GEN72 joint-limit monitor: Part A asserts the logic directly (boundary cases incl. the asymmetric J4/J6 limits) + Part B drives the event loop through the harness + **Part C plants a deliberate bug and shows the test catching it** |
 | Integration testing | `bash scripts/demo-integration.sh` | Four real pipelines: 7-joint configuration relay (echo), joint positions + velocities on two outputs (multi-echo), end-effector proximity stop (distance-guard), and a **misconfigured distance-guard (safety distance set too low — caught as match:false)** |
-| Regression testing | `cargo run --example demo_replay` | Trajectory-interpolation node records a baseline (140 trajectory values) → interpolation resolution changed 10→5 steps (a real motion-control regression) → 67 differences detected |
+| Regression testing | `cargo run --example demo_replay` | Trajectory-interpolation node records a baseline (140 trajectory values, **committed at `demo/trajectory-baseline.json` — CI replays against the committed copy**) → interpolation resolution changed 10→5 steps (a real motion-control regression) → 67 differences detected |
 | **All in one** | `bash scripts/demo-final.sh` | All three layers + the full test suite; clones dora at the pinned commit `1fba721` automatically |
 
 `demo/rust-dataflow.yml` additionally keeps a reference example of the tool applied to DORA's official rust-dataflow example with zero modifications.
