@@ -148,12 +148,12 @@ fn main() {
     let mut harness = NodeHarness::new().expect("harness creation failed");
     ok("harness ready");
 
-    step("Inject 2 joint configurations (Arrow Float64Array)");
-    // Configuration 1: a realistic safe pose.
-    let safe_pose = Float64Array::from(vec![0.52, -0.61, 1.90, -0.30, 0.80, 1.15, 0.0]);
+    step("Inject 2 joint configurations (Arrow Float64Array, degrees)");
+    // Configuration 1: a realistic safe pose (degrees).
+    let safe_pose = Float64Array::from(vec![30.0, -35.0, 109.0, -17.0, 46.0, 66.0, 0.0]);
     harness.send_data("joints", safe_pose.into_data());
     // Configuration 2: same pose but J4 at 62° (limit +55°) — dangerous.
-    let bad_pose = Float64Array::from(vec![0.52, -0.61, 1.90, 62.0, 0.80, 1.15, 0.0]);
+    let bad_pose = Float64Array::from(vec![30.0, -35.0, 109.0, 62.0, 46.0, 66.0, 0.0]);
     harness.send_data("joints", bad_pose.into_data());
     harness.send_stop();
     ok("2 configurations + Stop buffered");
