@@ -1,19 +1,22 @@
-//! dora-test-utils Demo — Record/Replay regression testing with DORA's
-//! official rust-dataflow example.
+//! dora-test-utils Demo — Record/Replay regression testing (Layer 3).
+//!
+//! GEN72 joint-space motion control scenario: a trajectory node linearly
+//! interpolates the 7 joints toward two target configurations.  The demo
+//! records the resulting trajectory, replays it unchanged (clean), then
+//! replays a MUTATED dataflow — the interpolation resolution changed from
+//! 10 to 5 steps (a real motion-control regression: someone edited the
+//! trajectory parameter) — and the regression is detected.
 //!
 //! Runs the static dataflow files in `demo/` — the same way a real user
 //! would point the tool at their own YAML:
-//!   - `demo/rust-dataflow.yml` — baseline (rust-node tick 10ms)
-//!   - `demo/rust-dataflow-mutated.yml` — mutated (rust-node tick 200ms)
+//!   - `demo/trajectory-baseline.yml` — interpolation --steps 10
+//!   - `demo/trajectory-mutated.yml`  — interpolation --steps 5
 //!
-//! Records rust-node output (deterministic UInt64, seed=42) and status-node
-//! output (non-deterministic String), then replays to detect regressions.
-//!
-//! Demonstrates:
-//!   - Non-invasive: DORA example nodes are NOT modified
-//!   - ignore_paths: skips .count field (deterministic bookkeeping)
-//!   - ignore_sink: skips status-node output (non-deterministic)
-//!   - Regression detection: mutated tick rate → array length mismatch
+//! The trajectory output is pure computation, so it is fully
+//! deterministic and needs no filtering.  For real pipelines with
+//! non-deterministic noise (timestamps, tick counts, debug logs),
+//! `ReplaySession::ignore_paths` / `ignore_sink` skip those fields —
+//! see README and tests/e2e_replay.rs.
 //!
 //! Run from the repo root (demo-final.sh does this automatically).
 
@@ -74,14 +77,27 @@ fn section(title: &str) {
     println!("\n═══ {} ═══\n", title);
 }
 fn step(msg: &str) {
-    println!("▸ {}", msg);
+    println!("▸ {msg}");
 }
 fn ok(msg: &str) {
-    println!("  ✅ {}", msg);
+    println!("  ✅ {msg}");
 }
 fn fail(msg: &str) -> ! {
-    eprintln!("  ❌ {}", msg);
+    eprintln!("  ❌ {msg}");
     std::process::exit(1);
+}
+
+/// Print the diff report, truncated for readability in the demo.
+fn print_diff_trimmed(diff: &dora_test_utils::DiffReport, max_lines: usize) {
+    let text = diff.to_string();
+    let lines: Vec<&str> = text.lines().collect();
+    let shown = lines.len().min(max_lines);
+    for line in &lines[..shown] {
+        println!("    {line}");
+    }
+    if lines.len() > max_lines {
+        println!("    … ({} more lines)", lines.len() - max_lines);
+    }
 }
 
 // ── Main ───────────────────────────────────────────────────
@@ -89,10 +105,9 @@ fn fail(msg: &str) -> ! {
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args = parse_args();
 
-    section("dora-test-utils — Record/Replay Demo");
-    println!("  DORA rust-dataflow example (unmodified upstream nodes)");
+    section("dora-test-utils — Record/Replay Demo (Layer 3: regression testing)");
+    println!("  GEN72 joint-space motion control — trajectory interpolation");
     println!("  Static dataflow files under demo/ — no YAML generation");
-    println!("  Demonstrates ignore_paths + ignore_sink filtering");
     println!();
 
     let _dora = match resolve_dora(&args) {
@@ -121,23 +136,21 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Static dataflow files. dora resolves their relative paths against
     // the YAML file's own directory, so no generation is needed.
-    let baseline_yaml = PathBuf::from("demo/rust-dataflow.yml");
-    let mutated_yaml = PathBuf::from("demo/rust-dataflow-mutated.yml");
+    let baseline_yaml = PathBuf::from("demo/trajectory-baseline.yml");
+    let mutated_yaml = PathBuf::from("demo/trajectory-mutated.yml");
 
-    // Output paths must match the test-sink args in the static YAMLs.
-    let random_output = PathBuf::from("demo/sink_random_output.json");
-    let status_output = PathBuf::from("demo/sink_status_output.json");
+    // Output path must match the test-sink args in the static YAMLs.
+    let sink_output = PathBuf::from("demo/sink_trajectory.json");
 
     // ── Step 1: Record baseline ────────────────────────
-    section("Step 1 — Record baseline");
+    section("Step 1 — Record baseline (trajectory with --steps 10)");
 
     step(&format!("Dataflow: {}", baseline_yaml.display()));
+    step("2 targets × 10 interpolation steps × 7 joints = 140 trajectory values");
     step("Running dora run --stop-after 10s ...");
-    step("Recording: test-sink-random (rust-node UInt64) + test-sink-status (String)");
 
     let recording = RecordSession::attach(&baseline_yaml)?
-        .record_sink("test-sink-random", &random_output)
-        .record_sink("test-sink-status", &status_output)
+        .record_sink("test-sink", &sink_output)
         .with_timeout(Duration::from_secs(10))
         .run()?;
 
@@ -152,33 +165,24 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         "  sinks recorded: {:?}",
         recording.sinks.keys().collect::<Vec<_>>()
     );
-    if let Some(random_data) = recording.sinks.get("test-sink-random") {
-        if let Some(count) = random_data.get("count") {
-            println!(
-                "  random events:  {count} (~100 — upstream rust-node caps its loop at 100 events)"
-            );
+    if let Some(traj) = recording.sinks.get("test-sink") {
+        if let Some(count) = traj.get("count") {
+            println!("  trajectory values: {count} (expected 140)");
         }
-    }
-    if let Some(status_data) = recording.sinks.get("test-sink-status") {
-        if let Some(arr) = status_data.get("data").and_then(|d| d.as_array()) {
-            if let Some(first) = arr.first().and_then(|v| v.as_str()) {
-                println!("  status sample:  {first}");
-            }
+        if let Some(arr) = traj.get("data").and_then(|d| d.as_array()) {
+            let head: Vec<String> = arr.iter().take(7).map(|v| v.to_string()).collect();
+            println!("  first step (J1..J7): [{}]", head.join(", "));
         }
     }
 
     // ── Step 2: Clean replay ───────────────────────────
     section("Step 2 — Replay (same YAML, no regression)");
 
-    step("Using ignore_paths(&[\"count\", \"data.length\"]) — under load the");
-    step("replay run can deliver a few events fewer than the baseline's ~100");
-    step("(timing jitter, not a regression); value diffs at data[i] still fire");
-    step("Using ignore_sink(\"test-sink-status\") to skip non-deterministic status output");
+    step("The trajectory output is pure computation — fully deterministic,");
+    step("so no filtering is needed. Real pipelines with timing noise use");
+    step("ignore_paths / ignore_sink to skip non-deterministic fields.");
     let result = ReplaySession::load(&baseline_path)?
-        .replay_sink("test-sink-random", &random_output)
-        .replay_sink("test-sink-status", &status_output)
-        .ignore_paths(&["count", "data.length"])
-        .ignore_sink("test-sink-status")
+        .replay_sink("test-sink", &sink_output)
         .with_timeout(Duration::from_secs(10))
         .run()?;
 
@@ -187,12 +191,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     ok("assert_no_regression() — no panic");
 
     // ── Step 3: Mutated dataflow ───────────────────────
-    section("Step 3 — Switch to mutated dataflow (rust-node tick: 10ms → 200ms)");
+    section("Step 3 — Switch to mutated dataflow (interpolation --steps 10 → 5)");
 
     step(&format!("Dataflow: {}", mutated_yaml.display()));
-    step("At 200ms tick, only ~50 ticks arrive in the 10s window — under the 100-event loop cap");
-    step("→ ~50 random events instead of ~100 (upstream node exits after 100 events)");
-    step("Same ignore_paths + ignore_sink filters applied");
+    step("The motion controller now interpolates with HALF the resolution —");
+    step("a real regression: someone changed the trajectory parameter.");
+    step("→ 2 × 5 × 7 = 70 trajectory values instead of 140, and every");
+    step("   shared interpolation point differs.");
     ok("mutated dataflow ready");
 
     // ── Step 4: Regression detected ────────────────────
@@ -200,11 +205,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     step("Replaying with mutated dataflow...");
     let result = ReplaySession::load(&baseline_path)?
-        .replay_sink("test-sink-random", &random_output)
-        .replay_sink("test-sink-status", &status_output)
+        .replay_sink("test-sink", &sink_output)
         .dataflow(&mutated_yaml)
-        .ignore_paths(&["count"])
-        .ignore_sink("test-sink-status")
         .with_timeout(Duration::from_secs(10))
         .run()?;
 
@@ -214,10 +216,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
     ok(&format!("is_clean() = {}  ← regression detected", clean));
 
-    // Print the structured diff
-    let diff = result.diff();
-    println!();
-    println!("{diff}");
+    // Print the structured diff (trimmed for readability)
+    step("DiffReport:");
+    print_diff_trimmed(result.diff(), 14);
 
     // assert_no_regression should panic here
     step("Verifying assert_no_regression() panics on regression...");
@@ -231,18 +232,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // ── Summary ────────────────────────────────────────
     section("Summary");
-    println!("  ✅ Record baseline         — 2 sinks (random UInt64 + status String)");
-    println!("  ✅ Replay (clean)          — is_clean() = true (count ignored, status skipped)");
-    println!("  ✅ Replay (regression)     — is_clean() = false, array length mismatch detected");
+    println!("  ✅ Record baseline         — 140 trajectory values (steps 10)");
+    println!("  ✅ Replay (clean)          — is_clean() = true (deterministic output)");
+    println!("  ✅ Replay (regression)     — is_clean() = false, 140 → 70 values");
     println!("  ✅ assert_no_regression()  — panics on regression");
     println!();
     println!("  How this helps the DORA community:");
-    println!("    • DORA rust-dataflow example nodes are UNMODIFIED");
-    println!("    • Only added: 2 test-sink nodes (2 YAML entries) for regression coverage");
+    println!("    • GEN72 motion-control scenario — a realistic regression test");
     println!("    • Static YAML files — exactly how you'd use the tool on your own dataflow");
-    println!("    • ignore_paths filters deterministic bookkeeping (event count) without masking data diffs");
-    println!("    • ignore_sink handles non-deterministic output (debug strings)");
-    println!("    • Filtering makes Record/Replay practical for real pipelines");
+    println!("    • The mutation is a parameter change in the dataflow, not in the tool");
+    println!("    • Non-deterministic noise? ignore_paths / ignore_sink handle it");
 
     Ok(())
 }

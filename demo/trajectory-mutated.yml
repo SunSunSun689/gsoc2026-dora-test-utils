@@ -1,0 +1,32 @@
+# dora-test-utils Layer 3 Demo — MUTATED trajectory dataflow
+# This is THE file the demo runs for the regression step
+# (examples/demo_replay.rs Step 3-4, via ReplaySession::dataflow()).
+# See demo/README.md for the full walkthrough.
+#
+# Same as trajectory-baseline.yml, except trajectory-node interpolates
+# with --steps 5 instead of 10 — a coarser motion trajectory (a real
+# motion-control regression: someone changed the interpolation
+# resolution).  The recorded trajectory shrinks from 140 values
+# (2 targets × 10 steps × 7 joints) to 70, and every shared point
+# differs — ReplaySession must catch both.
+
+nodes:
+  - id: test-source
+    path: ../target/debug/test-source
+    args: "--output-id target --data-file trajectory-targets.json"
+    outputs:
+      - target
+
+  - id: trajectory-node
+    path: ../target/debug/trajectory-node
+    args: "--steps 5"
+    inputs:
+      target: test-source/target
+    outputs:
+      - trajectory
+
+  - id: test-sink
+    path: ../target/debug/test-sink
+    inputs:
+      trajectory: trajectory-node/trajectory
+    args: "--output-file ./sink_trajectory.json --record-mode"
