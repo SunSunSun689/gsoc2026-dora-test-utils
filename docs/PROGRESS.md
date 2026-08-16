@@ -30,6 +30,7 @@
   - **关键 bug 修复**：test-source 发完立即退出导致 daemon 丢弃在途消息（轨迹 demo 14 个值丢 4-7 个，非确定性）——加 500ms 发前等待（晚订阅竞态）+ 2s 发后驻留（收尾竞态）。修复后 8 次连续运行全部 140/140。
   - 验证：demo-final.sh 全流程 exit 0；e2e_record 4/4、e2e_replay 13/13、integration 6/6；91 lib。
 - **清理 (2026-08-16)**: 删除被 demo-final.sh 取代的三个旧脚本（demo.sh / demo-week8.sh / demo-week12.sh）、退役的 classifier fixture 组（YAML + 4 JSON，classifier-node 二进制保留给集成测试）、孤儿文件 classifier-source-expected.json。FINAL-REPORT 2.7 结构图同步更新。净删 686 行。
+- **第二轮 code review 修复 (2026-08-16)**: `/code-review` 针对轨迹 demo 找出 8 个 finding（其中 2 个已提前修复被自动排除），全部修复：demo_replay 删除死的 `--dora` 参数（sessions 内部解析 CLI）及其越界解析、Step 1 断言轨迹值 == 140（消息丢失时录制期即大声失败而非静默演示空内容）、test-source 的 sleep 改为具名常量并在 standalone 模式跳过、trajectory-node `--steps 0/缺失` 报错 + 尾部驻留、demo-final.sh 过期 summary 文案修正 + SKIP_BUILD 委托避免重复构建、README Layer 3 文案更新、顺带清掉遗留的 PI approx_constant 和 needless borrow（clippy --all-targets 现在 0 警告）。验证：demo-final.sh exit 0、integration 4/4、轨迹 3×140、91 lib。
 - **Code review fixes (2026-08-13)**: `/code-review` found 15 findings (24 confirmed). Fixed in 4 commits:
   - `fa427b2` — comparison false negatives: exact large-integer comparison (f64 2^53 rounding), length-mismatch no longer hides prefix value diffs, Float64-widening round-trip precision guard, `.data_type` Int32→Int64 tolerance, zero-event warning
   - `c1c971d` — harness/mock: panic on post-init dropped events, unbounded MockOutputSender channel, removed broken `Default` impl
