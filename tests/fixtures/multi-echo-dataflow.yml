@@ -1,6 +1,9 @@
 # Multi-output echo pipeline — test-source emits on two outputs,
 # each goes through an echo node to a dedicated sink.
 #
+# Embodied-AI theme: a robot arm's state stream — data_a carries joint
+# positions, data_b carries tool velocities — routed to two consumers.
+#
 # Verifies multi-output support in test-source and proper routing
 # in multi-node dataflows.
 #
@@ -11,7 +14,7 @@
 nodes:
   - id: test-source
     path: ../../target/debug/test-source
-    args: "--output data_a:source-data.json --output data_b:classifier-source.json"
+    args: "--output data_a:source-data.json --output data_b:source-velocity.json"
     outputs:
       - data_a
       - data_b
@@ -40,4 +43,4 @@ nodes:
     path: ../../target/debug/test-sink
     inputs:
       data_b: echo-b/data_b
-    args: "--expected-file classifier-source-expected.json --output-file result-b.json"
+    args: "--expected-file expected-velocity.json --output-file result-b.json"

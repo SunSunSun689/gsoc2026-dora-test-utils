@@ -71,8 +71,8 @@ banner "1. Build all binaries"
 BUILD_LOG=$(mktemp)
 trap "rm -f $BUILD_LOG" EXIT
 
-step "Build test-source, test-sink, echo-node, classifier-node..."
-if cargo build --bin test-source --bin test-sink --bin echo-node --bin classifier-node > "$BUILD_LOG" 2>&1; then
+step "Build test-source, test-sink, echo-node, classifier-node, distance-guard..."
+if cargo build --bin test-source --bin test-sink --bin echo-node --bin classifier-node --bin distance-guard > "$BUILD_LOG" 2>&1; then
     tail -1 "$BUILD_LOG"
 else
     warn "Build failed! Last 20 lines:"
@@ -125,7 +125,7 @@ else
 fi
 
 # ─── 3. Layer 2: Integration testing ────────────────────
-banner "3. Layer 2 — Integration testing (test-source → node → test-sink)"
+banner "3. Layer 2 — Integration testing (robot-arm pipelines)"
 
 # Run each fixture pipeline and check the test-sink comparison result.
 # Fixture args are relative to the YAML's directory (dora spawns nodes
@@ -162,16 +162,16 @@ run_integration_pipeline() {
     done
 }
 
-step "Pipeline 1/3: echo (test-source → echo-node → test-sink)"
+step "Pipeline 1/3: echo — joint positions relayed through an echo node"
 run_integration_pipeline "tests/fixtures/echo-dataflow.yml" "tests/fixtures/result.json"
 
-step "Pipeline 2/3: multi-echo (two outputs, two sinks)"
+step "Pipeline 2/3: multi-echo — joint positions + tool velocities, two sinks"
 run_integration_pipeline "tests/fixtures/multi-echo-dataflow.yml" \
     "tests/fixtures/result-a.json" "tests/fixtures/result-b.json"
 
-step "Pipeline 3/3: classifier (threshold split → high/low sinks)"
-run_integration_pipeline "tests/fixtures/classifier-dataflow.yml" \
-    "tests/fixtures/result-high.json" "tests/fixtures/result-low.json"
+step "Pipeline 3/3: distance-guard — proximity safety stop (0.15 m inside the safety radius)"
+run_integration_pipeline "tests/fixtures/distance-guard-dataflow.yml" \
+    "tests/fixtures/result-distance.json"
 
 # ─── 4. Layer 3: Record/Replay demo ─────────────────────
 banner "4. Layer 3 — Record/Replay regression testing demo"
@@ -236,7 +236,8 @@ banner "Demo Complete"
 
 echo -e "${GREEN}${BOLD}Summary:${NC}"
 echo "  • Layer 1 (NodeHarness):      unit testing without daemon — harness_demo"
-echo "  • Layer 2 (TestSource/Sink):  3 pipelines with expected-file comparison"
+echo "  • Layer 2 (TestSource/Sink):  robot-arm pipelines — joint positions,";
+echo "                                 tool velocities, proximity safety stop"
 echo "  • Layer 3 (Record/Replay):    rust-dataflow example, upstream nodes unmodified"
 echo "  • ReplaySession (clean):      ignore_paths([count]) + ignore_sink(status) → is_clean() = true"
 echo "  • ReplaySession (regression): tick 10ms → 200ms → array length mismatch → DiffReport"

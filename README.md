@@ -43,7 +43,7 @@ fn test_my_node() {
 
 ### Layer 2: TestSource + TestSink（集成测试）
 
-四个现成的二进制节点，直接写进 dataflow YAML 就能用：
+五个现成的二进制节点，直接写进 dataflow YAML 就能用：
 
 | 二进制 | 作用 |
 |--------|------|
@@ -51,6 +51,7 @@ fn test_my_node() {
 | `test-sink` | 接收 DORA 输入，跟预期文件比对，输出匹配结果 |
 | `echo-node` | 透传：收到啥发啥，用于验证链路通不通 |
 | `classifier-node` | 按阈值分流：Int64 数值 > 阈值发到 high，否则发到 low |
+| `distance-guard` | 具身智能示例：距离读数 < 0.5m 时发急停信号（末端碰撞防护） |
 
 ```yaml
 nodes:
@@ -124,7 +125,7 @@ if result.is_clean() {
 ### 编译所有二进制
 
 ```bash
-cargo build --bin test-source --bin test-sink --bin echo-node --bin classifier-node
+cargo build --bin test-source --bin test-sink --bin echo-node --bin classifier-node --bin distance-guard
 ```
 
 ### 跑测试
@@ -160,8 +161,8 @@ bash scripts/demo-final.sh
 
 一键展示全部三层测试能力：
 
-1. **Layer 1** — `examples/harness_demo.rs`：NodeHarness 单元测试，不起 daemon，注入输入 → 驱动事件 → 捕获输出 → 断言
-2. **Layer 2** — 三条真实 dataflow 流水线（echo / multi-echo / classifier），test-source 喂数据，test-sink 跟预期文件比对
+1. **Layer 1** — `examples/harness_demo.rs`：NodeHarness 单元测试，不起 daemon。场景：Realman GEN72 机械臂关节限位安全监测
+2. **Layer 2** — 三条机械臂主题的真实 dataflow 流水线：关节位置回传（echo）/ 关节位置 + 末端速度双路回传（multi-echo）/ 末端碰撞防护急停（distance-guard，0.15m 读数触发 stop）
 3. **Layer 3** — `examples/demo_replay.rs`：DORA 官方 rust-dataflow example（上游节点零修改），RecordSession 录制基线 → ReplaySession 检测回归
 
 脚本自动 clone dora（pin 到 `1fba721`）、构建全部二进制、跑三个 demo、再跑完整 116 测试套件。
@@ -180,7 +181,8 @@ src/
 └── bin/
     ├── test_source.rs    # test-source CLI
     ├── test-sink.rs      # test-sink CLI
-    └── classifier_node.rs # classifier-node CLI
+    ├── classifier_node.rs # classifier-node CLI
+    └── distance_guard.rs # distance-guard CLI（末端碰撞防护示例）
 tests/
 ├── fixtures/       # YAML dataflow、测试数据文件（静态可直接 dora run）
 ├── echo-node.rs    # echo-node 二进制（透传）

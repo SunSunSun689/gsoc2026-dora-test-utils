@@ -1,4 +1,4 @@
 {
-  "data": [42, 99, -1],
-  "data_type": "Int64"
+  "data": [0.52, -0.61, 1.90],
+  "data_type": "Float64"
 }
