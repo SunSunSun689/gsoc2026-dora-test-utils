@@ -86,7 +86,7 @@ ReplaySession::load("baseline.json")?
 |------|------|------|
 | 单元测试 | `cargo run --example harness_demo` | GEN72 关节限位监测：Part A 直测逻辑（含 J4/J6 不对称限位的边界用例）+ Part B 经 harness 跑事件循环 + **Part C 故意造一个 bug 并展示测试如何抓住它** |
 | 集成测试 | `bash scripts/demo-integration.sh` | 四条真实流水线：七轴配置回传（echo）、关节位置 + 速度双路（multi-echo）、末端防撞急停（distance-guard）、**配错的 distance-guard（安全距离设太低，被质检员抓出 match:false）** |
-| 回归测试 | `cargo run --example demo_replay` | 轨迹插值节点录制基线（140 个轨迹值，**基线提交在 `demo/trajectory-baseline.json`，CI 直接回放这份提交的基线**）→ 插值分辨率 10→5 步（真实运动控制回归）→ 检测 67 处差异 |
+| 回归测试 | `cargo run --example demo_replay` | 轨迹插值节点录制基线（140 个轨迹值）→ 插值分辨率 10→5 步（真实运动控制回归）→ 检测 67 处差异 |
 | **一键总览** | `bash scripts/demo-final.sh` | 三层连放 + 完整测试套件；自动 clone dora 到 pin 住的 commit `1fba721` |
 
 另外 `demo/rust-dataflow.yml` 保留了工具对 DORA 官方 rust-dataflow example 零修改用法的参考示例。
@@ -134,7 +134,7 @@ docs/              # 设计文档、进度记录
 
 ## 进度
 
-Week 1-11 全部完成（API 设计、NodeHarness、TestSource/TestSink、CI、Record/Replay、DORA 升级）；Week 12-13 完成 demo 打磨（三层 GEN72 主题化、每层内置抓错演示、回归基线提交进仓库、双语 README、两轮 code review 修复）；**PR #44 已于 2026-08-16 合并进 dora-rs/gsoc2026-dora-test-utils 的 main 分支**。详见 [`docs/PROGRESS.md`](docs/PROGRESS.md)。
+Week 1-11 全部完成（API 设计、NodeHarness、TestSource/TestSink、CI、Record/Replay、DORA 升级）；Week 12-13 完成 demo 打磨（三层 GEN72 主题化 + 两轮 code review 修复）。详见 [`docs/PROGRESS.md`](docs/PROGRESS.md)。
 
 ## 许可
 
