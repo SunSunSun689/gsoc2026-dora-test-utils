@@ -98,13 +98,19 @@ The proposal's extended-scope regression-testing layer, delivered Weeks 9–10.
 
 ```
 tests/fixtures/
-├── echo-node.rs            # Pass-through node (also a [[bin]] target)
-├── echo-dataflow.yml       # echo pipeline: test-source → echo-node → test-sink
-├── multi-echo-dataflow.yml # multi-output echo (3 outputs)
-├── classifier-dataflow.yml # test-source → classifier-node → test-sink
+├── echo-node.rs                  # Pass-through node (also a [[bin]] target)
+├── echo-dataflow.yml             # GEN72 7-joint configuration relayed
+├── multi-echo-dataflow.yml       # joint positions + joint velocities, 2 sinks
+├── distance-guard-dataflow.yml   # end-effector proximity safety stop
 ├── source-data.json / expected-output.json
-examples/demo_replay.rs     # Record → Replay → regression detection demo
-scripts/demo-week12.sh      # One-command build + demo + full test suite
+├── source-velocity.json / expected-velocity.json
+├── source-distance.json / expected-distance.json
+examples/harness_demo.rs          # Layer 1: GEN72 joint-limit unit testing demo
+examples/demo_replay.rs           # Layer 3: Record → Replay regression demo
+demo/rust-dataflow.yml            # Layer 3 baseline dataflow (run as-is)
+demo/rust-dataflow-mutated.yml    # Layer 3 mutated dataflow
+demo/README.md                    # Layer 3 walkthrough
+scripts/demo-final.sh             # One-command 3-layer demo + full test suite
 ```
 
 ---
