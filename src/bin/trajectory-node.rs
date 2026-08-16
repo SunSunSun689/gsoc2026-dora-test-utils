@@ -19,23 +19,33 @@ use dora_node_api::{DoraNode, Event, MetadataParameters};
 /// GEN72 joint count.
 const JOINTS: usize = 7;
 
-/// Parse the `--steps <n>` CLI argument (default 10).
-fn parse_steps() -> usize {
+/// Parse the `--steps <n>` CLI argument (default 10).  Fails on
+/// `--steps 0` (or a missing/unparseable value) — zero steps would
+/// silently emit no trajectory at all.
+fn parse_steps() -> eyre::Result<usize> {
     let args: Vec<String> = std::env::args().collect();
-    let mut steps = 10;
+    let mut steps = 10usize;
     let mut i = 1;
     while i < args.len() {
         if args[i] == "--steps" {
             i += 1;
-            steps = args.get(i).and_then(|s| s.parse().ok()).unwrap_or(10);
+            let raw = args
+                .get(i)
+                .ok_or_else(|| eyre::eyre!("--steps requires a value"))?;
+            steps = raw
+                .parse()
+                .map_err(|e| eyre::eyre!("invalid --steps value '{raw}': {e}"))?;
         }
         i += 1;
     }
-    steps
+    if steps == 0 {
+        eyre::bail!("--steps must be >= 1");
+    }
+    Ok(steps)
 }
 
 fn main() -> eyre::Result<()> {
-    let steps = parse_steps();
+    let steps = parse_steps()?;
     let (mut node, mut events) =
         DoraNode::init_from_env().map_err(|e| eyre::eyre!("trajectory-node: {e}"))?;
 
@@ -91,5 +101,11 @@ fn main() -> eyre::Result<()> {
             _ => {}
         }
     }
+
+    // Linger before exiting so the daemon can deliver every emitted
+    // trajectory value to the sink — the same in-flight-message race
+    // test-source guards against (see src/source.rs).
+    std::thread::sleep(std::time::Duration::from_secs(2));
+
     Ok(())
 }

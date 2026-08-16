@@ -11,7 +11,7 @@ use std::process::Command;
 use std::sync::OnceLock;
 
 fn dora_available() -> bool {
-    Command::new(&find_dora_binary())
+    Command::new(find_dora_binary())
         .arg("--version")
         .output()
         .map(|o| o.status.success())

@@ -58,18 +58,23 @@ fi
 ok "dora CLI: $DORA_BIN"
 
 # ─── 1. Build ────────────────────────────────────────────
+# SKIP_BUILD=1 (set by demo-final.sh, which already built everything)
 banner "1. Build binaries"
 
 BUILD_LOG=$(mktemp)
 trap "rm -f $BUILD_LOG" EXIT
 
-step "Build test-source, test-sink, echo-node, distance-guard..."
-if cargo build --bin test-source --bin test-sink --bin echo-node --bin distance-guard > "$BUILD_LOG" 2>&1; then
-    tail -1 "$BUILD_LOG"
+if [ "${SKIP_BUILD:-0}" = "1" ]; then
+    ok "build skipped (orchestrated by demo-final.sh)"
 else
-    warn "Build failed! Last 20 lines:"
-    tail -20 "$BUILD_LOG"
-    exit 1
+    step "Build test-source, test-sink, echo-node, distance-guard..."
+    if cargo build --bin test-source --bin test-sink --bin echo-node --bin distance-guard > "$BUILD_LOG" 2>&1; then
+        tail -1 "$BUILD_LOG"
+    else
+        warn "Build failed! Last 20 lines:"
+        tail -20 "$BUILD_LOG"
+        exit 1
+    fi
 fi
 
 # ─── 2. Pipelines ────────────────────────────────────────
@@ -130,5 +135,5 @@ echo "  • multi-echo:  joint positions + joint velocities on two outputs"
 echo "  • distance-guard: 0.15 m reading triggered the safety stop"
 echo ""
 echo "  Layer 1 (unit):      cargo run --example harness_demo"
-echo "  Layer 3 (regression): cargo run --example demo_replay -- --dora $DORA_BIN"
+echo "  Layer 3 (regression): cargo run --example demo_replay"
 echo "  All layers + tests:  bash scripts/demo-final.sh"

@@ -163,7 +163,7 @@ bash scripts/demo-final.sh
 
 1. **Layer 1** — `examples/harness_demo.rs`：NodeHarness 单元测试，不起 daemon。场景：Realman GEN72 机械臂关节限位安全监测
 2. **Layer 2** — 三条机械臂主题的真实 dataflow 流水线：关节位置回传（echo）/ 关节位置 + 末端速度双路回传（multi-echo）/ 末端碰撞防护急停（distance-guard，0.15m 读数触发 stop）
-3. **Layer 3** — `examples/demo_replay.rs`：DORA 官方 rust-dataflow example（上游节点零修改），RecordSession 录制基线 → ReplaySession 检测回归
+3. **Layer 3** — `examples/demo_replay.rs`：GEN72 关节空间运动控制——轨迹插值节点录制基线（`--steps 10`，140 个轨迹值）→ 变异插值分辨率（`--steps 5`）→ ReplaySession 检测回归（140→70 值 + 逐点差异）。`demo/rust-dataflow.yml` 保留为工具对 DORA 官方 example 零修改用法的附赠示例
 
 脚本自动 clone dora（pin 到 `1fba721`）、构建全部二进制、跑三个 demo、再跑完整 116 测试套件。
 

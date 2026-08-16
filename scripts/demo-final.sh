@@ -127,51 +127,10 @@ fi
 # ─── 3. Layer 2: Integration testing ────────────────────
 banner "3. Layer 2 — Integration testing (robot-arm pipelines)"
 
-# Run each fixture pipeline and check the test-sink comparison result.
-# Fixture args are relative to the YAML's directory (dora spawns nodes
-# there), so the static files work as-is from the repo root.
-run_integration_pipeline() {
-    local yaml="$1"
-    shift
-    local result_files=("$@")
-
-    # Remove stale result files first — a leftover "match": true from a
-    # previous run would otherwise satisfy the check even if this run's
-    # sink wrote nothing.
-    rm -f "${result_files[@]}"
-
-    step "Running $yaml ..."
-    set +e
-    timeout 60 "$DORA_BIN" run "$yaml" --stop-after 15s > "$BUILD_LOG" 2>&1
-    local dora_exit=$?
-    set -e
-    if [ $dora_exit -ne 0 ]; then
-        warn "dora run failed (exit $dora_exit). Last 10 log lines:"
-        tail -10 "$BUILD_LOG"
-        exit 1
-    fi
-
-    for rf in "${result_files[@]}"; do
-        if [ -f "$rf" ] && grep -q '"match": true' "$rf"; then
-            ok "$rf — MATCH (test-sink compared against expected file)"
-        else
-            warn "$rf — MISMATCH or missing:"
-            cat "$rf" 2>/dev/null || echo "(file not found)"
-            exit 1
-        fi
-    done
-}
-
-step "Pipeline 1/3: echo — GEN72 7-joint configuration (J1..J7) relayed"
-run_integration_pipeline "tests/fixtures/echo-dataflow.yml" "tests/fixtures/result.json"
-
-step "Pipeline 2/3: multi-echo — GEN72 joint positions + joint velocities, two sinks"
-run_integration_pipeline "tests/fixtures/multi-echo-dataflow.yml" \
-    "tests/fixtures/result-a.json" "tests/fixtures/result-b.json"
-
-step "Pipeline 3/3: distance-guard — GEN72 end-effector proximity stop (0.15 m inside the safety radius)"
-run_integration_pipeline "tests/fixtures/distance-guard-dataflow.yml" \
-    "tests/fixtures/result-distance.json"
+# The Layer 2 demo lives in its own standalone script (runnable alone:
+# SKIP_BUILD=1 bash scripts/demo-integration.sh) — the pipelines and checks are
+# defined there so they exist in exactly one place.
+SKIP_BUILD=1 bash scripts/demo-integration.sh
 
 # ─── 4. Layer 3: Record/Replay demo ─────────────────────
 banner "4. Layer 3 — Record/Replay regression demo (GEN72 trajectory)"
@@ -181,11 +140,7 @@ if [ -f "$DEMO" ]; then
     step "Running Record/Replay demo..."
     echo ""
     set +e
-    if [ -f "$DORA_BIN" ]; then
-        "$DEMO" --dora "$DORA_BIN" 2>&1
-    else
-        "$DEMO" 2>&1
-    fi
+    "$DEMO" 2>&1
     DEMO_EXIT=$?
     set -e
     echo ""
@@ -239,8 +194,8 @@ echo "  • Layer 1 (NodeHarness):      unit testing without daemon — harness_
 echo "  • Layer 2 (TestSource/Sink):  robot-arm pipelines — joint positions,";
 echo "                                 tool velocities, proximity safety stop"
 echo "  • Layer 3 (Record/Replay):    GEN72 trajectory — interpolation 10 → 5 steps"
-echo "  • ReplaySession (clean):      ignore_paths([count]) + ignore_sink(status) → is_clean() = true"
-echo "  • ReplaySession (regression): tick 10ms → 200ms → array length mismatch → DiffReport"
+echo "  • ReplaySession (clean):      deterministic trajectory, is_clean() = true"
+echo "  • ReplaySession (regression): 140 → 70 values + per-point diffs → DiffReport"
 echo "  • Full suite: 116 tests green (85 unit + 5 e2e + 4 record + 13 replay + 6 integration + 3 smoke)"
 echo ""
 echo -e "${CYAN}Repo:${NC} https://github.com/SunSunSun689/gsoc2026-dora-test-utils"

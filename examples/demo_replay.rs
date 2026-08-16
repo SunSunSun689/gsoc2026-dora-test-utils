@@ -21,57 +21,14 @@
 //! Run from the repo root (demo-final.sh does this automatically).
 
 use dora_test_utils::record::{RecordSession, ReplaySession};
-use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::path::PathBuf;
 use std::time::Duration;
 
-// ── CLI ────────────────────────────────────────────────────
-
-#[derive(Default)]
-struct Args {
-    dora: Option<PathBuf>,
-}
-
-fn parse_args() -> Args {
-    let args: Vec<String> = std::env::args().collect();
-    let mut opts = Args::default();
-    let mut i = 1;
-    while i < args.len() {
-        match args[i].as_str() {
-            "--dora" => {
-                i += 1;
-                opts.dora = Some(PathBuf::from(&args[i]));
-            }
-            other => {
-                eprintln!("Unknown flag: {other}");
-                eprintln!("Usage: demo_replay [--dora <path>]");
-                std::process::exit(2);
-            }
-        }
-        i += 1;
-    }
-    opts
-}
-
 // ── Helpers ────────────────────────────────────────────────
-
-fn resolve_dora(args: &Args) -> Option<PathBuf> {
-    if let Some(ref d) = args.dora {
-        return if d.exists() { Some(d.clone()) } else { None };
-    }
-    for profile in &["debug", "release"] {
-        let local = Path::new("dora/target").join(profile).join("dora");
-        if local.exists() {
-            return Some(local);
-        }
-    }
-    Command::new("dora")
-        .arg("--version")
-        .output()
-        .ok()
-        .filter(|o| o.status.success())
-        .map(|_| PathBuf::from("dora"))
-}
+// Note: the dora CLI is located inside RecordSession/ReplaySession
+// (dora/target/{debug,release}/dora, then PATH) — demo-final.sh
+// verifies the checkout is pinned at the expected commit before
+// running this demo.
 
 fn section(title: &str) {
     println!("\n═══ {} ═══\n", title);
@@ -103,30 +60,12 @@ fn print_diff_trimmed(diff: &dora_test_utils::DiffReport, max_lines: usize) {
 // ── Main ───────────────────────────────────────────────────
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let args = parse_args();
-
     section("dora-test-utils — Record/Replay Demo (Layer 3: regression testing)");
     println!("  GEN72 joint-space motion control — trajectory interpolation");
     println!("  Static dataflow files under demo/ — no YAML generation");
     println!();
 
-    let _dora = match resolve_dora(&args) {
-        Some(d) => {
-            step(&format!("dora CLI: {}", d.display()));
-            d
-        }
-        None => {
-            eprintln!(
-                "SKIP: dora CLI not found.\n\
-                 Build: PYO3_NO_PYTHON=1 cargo build --bin dora \\\n    \
-                 --manifest-path dora/binaries/cli/Cargo.toml\n\
-                 Or: --dora <path>"
-            );
-            return Ok(());
-        }
-    };
-
-    ok("prerequisites met");
+    ok("prerequisites: dora CLI resolved by RecordSession/ReplaySession");
 
     // ── Setup ──────────────────────────────────────────
     let tmp = tempfile::TempDir::new()?;
@@ -166,13 +105,20 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         recording.sinks.keys().collect::<Vec<_>>()
     );
     if let Some(traj) = recording.sinks.get("test-sink") {
-        if let Some(count) = traj.get("count") {
-            println!("  trajectory values: {count} (expected 140)");
+        let count = traj.get("count").and_then(|c| c.as_u64());
+        if count != Some(140) {
+            fail(&format!(
+                "baseline recorded {count:?} trajectory values, expected 140 — \
+                 the source delivery may have dropped messages"
+            ));
         }
+        println!("  trajectory values: 140 (expected)");
         if let Some(arr) = traj.get("data").and_then(|d| d.as_array()) {
             let head: Vec<String> = arr.iter().take(7).map(|v| v.to_string()).collect();
             println!("  first step (J1..J7): [{}]", head.join(", "));
         }
+    } else {
+        fail("baseline is missing the test-sink recording");
     }
 
     // ── Step 2: Clean replay ───────────────────────────
