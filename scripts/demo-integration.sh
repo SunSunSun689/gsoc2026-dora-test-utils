@@ -3,13 +3,16 @@
 # dora-test-utils — Layer 2 Demo: Integration Testing
 # ─────────────────────────────────────────────────────────────
 # Showcases test-source → node → test-sink end-to-end testing on
-# three Realman GEN72 robot-arm pipelines:
+# Realman GEN72 robot-arm pipelines — three correct pipelines plus
+# one MISCONFIGURED pipeline whose error the test-sink catches:
 #   1. echo — a 7-joint configuration (J1..J7) relayed and verified
 #   2. multi-echo — joint positions + joint velocities, two sinks
 #   3. distance-guard — end-effector proximity safety stop
+#   4. distance-guard (misconfigured) — safety distance set too low,
+#      the sink reports match:false — the error-catch demonstration
 #
 # Each pipeline runs as a real dora dataflow; test-sink compares the
-# node output against an expected file and the script checks match.
+# node output against an expected file and the script checks the result.
 #
 # Run: bash scripts/demo-integration.sh   (from anywhere — the script
 # cds to the repo root; requires the dora CLI at dora/target/…/dora)
@@ -115,16 +118,54 @@ run_pipeline() {
     done
 }
 
-step "Pipeline 1/3: echo — GEN72 7-joint configuration (J1..J7) relayed"
+# The error-catch pipeline: the node was MISconfigured (safety distance
+# too low), so the correct expected file must produce match:false —
+# the sink caught the error, which is the point of the demo.
+run_pipeline_expect_mismatch() {
+    local yaml="$1"
+    local result_file="$2"
+
+    rm -f "$result_file"
+
+    step "Running $yaml ..."
+    set +e
+    timeout 60 "$DORA_BIN" run "$yaml" --stop-after 15s > "$BUILD_LOG" 2>&1
+    local dora_exit=$?
+    set -e
+    # Exit 1 is EXPECTED here: test-sink bails with non-zero status
+    # when it finds differences.  The result file is the authority;
+    # only fail on real errors (timeout 124, spawn failures, ...).
+    if [ $dora_exit -ne 0 ] && [ $dora_exit -ne 1 ]; then
+        warn "dora run failed (exit $dora_exit). Last 10 log lines:"
+        tail -10 "$BUILD_LOG"
+        exit 1
+    fi
+
+    if [ -f "$result_file" ] && grep -q '"match": false' "$result_file"; then
+        ok "$result_file — MISMATCH as expected: the misconfiguration was caught"
+        echo "    differences (excerpt):"
+        grep -o '"message": "[^"]*"' "$result_file" | head -3 | sed 's/^/      /'
+    else
+        warn "$result_file — expected MISMATCH but got:"
+        cat "$result_file" 2>/dev/null || echo "(file not found)"
+        exit 1
+    fi
+}
+
+step "Pipeline 1/4: echo — GEN72 7-joint configuration (J1..J7) relayed"
 run_pipeline "tests/fixtures/echo-dataflow.yml" "tests/fixtures/result.json"
 
-step "Pipeline 2/3: multi-echo — GEN72 joint positions + joint velocities, two sinks"
+step "Pipeline 2/4: multi-echo — GEN72 joint positions + joint velocities, two sinks"
 run_pipeline "tests/fixtures/multi-echo-dataflow.yml" \
     "tests/fixtures/result-a.json" "tests/fixtures/result-b.json"
 
-step "Pipeline 3/3: distance-guard — GEN72 end-effector proximity stop (0.15 m inside the safety radius)"
+step "Pipeline 3/4: distance-guard — GEN72 end-effector proximity stop (0.15 m inside the safety radius)"
 run_pipeline "tests/fixtures/distance-guard-dataflow.yml" \
     "tests/fixtures/result-distance.json"
+
+step "Pipeline 4/4: distance-guard MISCONFIGURED — safety distance 0.5 → 0.1 m (error-catch demo)"
+run_pipeline_expect_mismatch "tests/fixtures/distance-guard-misconfigured.yml" \
+    "tests/fixtures/result-distance-misconfigured.json"
 
 # ─── Done ────────────────────────────────────────────────
 banner "Layer 2 Demo Complete"
@@ -133,6 +174,7 @@ echo -e "${GREEN}${BOLD}Summary:${NC}"
 echo "  • echo:        7-joint configuration relayed — 7/7 values match"
 echo "  • multi-echo:  joint positions + joint velocities on two outputs"
 echo "  • distance-guard: 0.15 m reading triggered the safety stop"
+echo "  • misconfigured distance-guard: safety distance 0.5→0.1 m — CAUGHT as match:false"
 echo ""
 echo "  Layer 1 (unit):      cargo run --example harness_demo"
 echo "  Layer 3 (regression): cargo run --example demo_replay"

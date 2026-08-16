@@ -10,10 +10,30 @@
 use arrow::array::{Array, Float64Array, Int64Array};
 use dora_node_api::{DoraNode, Event, MetadataParameters};
 
-/// Minimum allowed distance in meters — closer than this triggers a stop.
-const SAFETY_DISTANCE_M: f64 = 0.5;
+/// Default minimum allowed distance in meters — closer than this
+/// triggers a stop.
+const DEFAULT_SAFETY_DISTANCE_M: f64 = 0.5;
+
+/// Parse the optional `--safety-distance <m>` CLI argument.
+fn parse_safety_distance() -> f64 {
+    let args: Vec<String> = std::env::args().collect();
+    let mut distance = DEFAULT_SAFETY_DISTANCE_M;
+    let mut i = 1;
+    while i < args.len() {
+        if args[i] == "--safety-distance" {
+            i += 1;
+            distance = args
+                .get(i)
+                .and_then(|s| s.parse().ok())
+                .unwrap_or(DEFAULT_SAFETY_DISTANCE_M);
+        }
+        i += 1;
+    }
+    distance
+}
 
 fn main() -> eyre::Result<()> {
+    let safety_distance = parse_safety_distance();
     let (mut node, mut events) =
         DoraNode::init_from_env().map_err(|e| eyre::eyre!("distance-guard: {e}"))?;
 
@@ -26,7 +46,7 @@ fn main() -> eyre::Result<()> {
                 };
                 for i in 0..array.len() {
                     let distance = array.value(i);
-                    let flag: i64 = if distance < SAFETY_DISTANCE_M { 1 } else { 0 };
+                    let flag: i64 = if distance < safety_distance { 1 } else { 0 };
                     let output = Int64Array::from(vec![flag]);
                     node.send_output(
                         "safety"

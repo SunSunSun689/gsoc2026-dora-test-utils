@@ -54,6 +54,18 @@ mod node_logic {
             .zip(angles)
             .position(|(&(min, max), &angle)| angle < min || angle > max)
     }
+
+    /// Deliberately broken variant — simulates a developer typo (J4 max
+    /// limit 55 typed as 200).  Used only by Part C to show what a
+    /// failing test looks like; a real project would never ship this.
+    pub fn buggy_first_joint_violation(angles: &[f64]) -> Option<usize> {
+        let mut limits = JOINT_LIMITS;
+        limits[3].1 = 200.0; // the bug: J4's +55° limit became +200°
+        limits
+            .iter()
+            .zip(angles)
+            .position(|(&(min, max), &angle)| angle < min || angle > max)
+    }
 }
 
 fn section(title: &str) {
@@ -209,6 +221,31 @@ fn main() {
     }
     ok("assertion passed: exactly one emergency stop, joint 4 (1-based)");
 
+    // ── Part C: catching a bug (the point of testing) ─────
+    section("Part C — Catch a bug: what a failing test looks like");
+
+    step("Simulate a developer typo: J4 max limit 55° typed as 200°");
+    step("(node_logic::buggy_first_joint_violation — a deliberately broken copy)");
+    step("The test asserts the CORRECT behavior — J4 at 62° must trip the alarm:");
+    let caught = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        assert_eq!(
+            node_logic::buggy_first_joint_violation(&[0.0, 0.0, 0.0, 62.0, 0.0, 0.0, 0.0]),
+            Some(3),
+            "J4 at 62° exceeds the +55° limit"
+        );
+    }));
+    match caught {
+        Err(panic) => {
+            let msg = panic
+                .downcast_ref::<String>()
+                .cloned()
+                .unwrap_or_else(|| "(non-string panic message)".to_string());
+            println!("    ❌ test failed: {msg}");
+            ok("the bug was caught by the test — this is what tests are for");
+        }
+        Ok(()) => fail("the buggy logic PASSED — the test would NOT have caught it"),
+    }
+
     // ── Summary ─────────────────────────────────────────
     section("Summary");
     println!("  ✅ node_logic module        — the GEN72 limit-check logic (its lib.rs)");
@@ -216,6 +253,7 @@ fn main() {
     println!("                                 including the asymmetric J4/J6 limits");
     println!("  ✅ Part B                   — event loop driven by NodeHarness, calling");
     println!("                                 the SAME logic functions (no copy)");
+    println!("  ✅ Part C                   — a simulated bug caught by the assertions");
     println!();
     println!("  This is the recommended structure for testing a DORA node:");
     println!("    lib.rs  — the logic, written once");

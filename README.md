@@ -79,8 +79,8 @@ ReplaySession::load("baseline.json")?
 
 | Demo | 入口 | 内容 |
 |------|------|------|
-| 单元测试 | `cargo run --example harness_demo` | GEN72 关节限位监测：Part A 直测逻辑（含 J4/J6 不对称限位的边界用例）+ Part B 经 harness 跑事件循环 |
-| 集成测试 | `bash scripts/demo-integration.sh` | 三条真实流水线：七轴配置回传（echo）、关节位置 + 速度双路（multi-echo）、末端防撞急停（distance-guard，0.15m 读数触发 stop） |
+| 单元测试 | `cargo run --example harness_demo` | GEN72 关节限位监测：Part A 直测逻辑（含 J4/J6 不对称限位的边界用例）+ Part B 经 harness 跑事件循环 + **Part C 故意造一个 bug 并展示测试如何抓住它** |
+| 集成测试 | `bash scripts/demo-integration.sh` | 四条真实流水线：七轴配置回传（echo）、关节位置 + 速度双路（multi-echo）、末端防撞急停（distance-guard）、**配错的 distance-guard（安全距离设太低，被质检员抓出 match:false）** |
 | 回归测试 | `cargo run --example demo_replay` | 轨迹插值节点录制基线（140 个轨迹值）→ 插值分辨率 10→5 步（真实运动控制回归）→ 检测 67 处差异 |
 | **一键总览** | `bash scripts/demo-final.sh` | 三层连放 + 完整测试套件；自动 clone dora 到 pin 住的 commit `1fba721` |
 
