@@ -24,6 +24,11 @@
 - **Three-layer demo (2026-08-13)**: `demo-final.sh` now showcases ALL testing layers — Layer 1 `harness_demo` (NodeHarness, no daemon), Layer 2 three integration pipelines (echo/multi-echo/classifier with expected-file comparison, fixture YAMLs fixed to YAML-dir-relative paths), Layer 3 Record/Replay. `demo/README.md` added. Verified end-to-end: exit 0, 116/116 tests ✅
 - **harness_demo 结构改造 (2026-08-16)**: demo 从"逻辑内联在测试循环"改为展示推荐结构——`node_logic` 模块（代表节点的 lib.rs）写一次，Part A 纯逻辑普通断言直测，Part B 事件循环经 NodeHarness 驱动并调用同一逻辑函数（只改写收发壳子，零复制）。场景改为 Realman GEN72 机械臂关节限位监测（J1-J7 官方限位，含 J4/J6 不对称限位）。
 - **集成测试 demo 具身智能化 (2026-08-16)**: Layer 2 三条流水线从泛用场景改为 GEN72 机械臂主题——echo（七轴配置 J1..J7 回传，与 harness_demo 同一安全姿态）、multi-echo（关节位置 + 关节速度双路）、distance-guard（末端碰撞防护，0.15m 读数触发急停）。新增 `src/bin/distance-guard.rs` 节点二进制。三条流水线端到端验证 match:true，expected_count 7。
+- **三层 demo GEN72 化 + 独立化 (2026-08-16)**: 
+  - Layer 3 回归 demo 从 rust-dataflow 随机数场景换成 GEN72 关节空间运动控制——新增 `src/bin/trajectory-node.rs`（7 关节线性插值，`--steps` 参数），baseline `--steps 10` 录 140 个轨迹值，mutated `--steps 5` 触发真实运动控制回归（70 值 + 65 处逐点值差异 + count + length 共 67 diffs）。rust-dataflow YAML 保留为附赠官方示例。
+  - 三层 demo 独立化：Layer 1 `cargo run --example harness_demo`；Layer 2 新增 `scripts/demo-integration.sh`（独立脚本）；Layer 3 `cargo run --example demo_replay`；`demo-final.sh` 降级为编排者。
+  - **关键 bug 修复**：test-source 发完立即退出导致 daemon 丢弃在途消息（轨迹 demo 14 个值丢 4-7 个，非确定性）——加 500ms 发前等待（晚订阅竞态）+ 2s 发后驻留（收尾竞态）。修复后 8 次连续运行全部 140/140。
+  - 验证：demo-final.sh 全流程 exit 0；e2e_record 4/4、e2e_replay 13/13、integration 6/6；91 lib。
 - **清理 (2026-08-16)**: 删除被 demo-final.sh 取代的三个旧脚本（demo.sh / demo-week8.sh / demo-week12.sh）、退役的 classifier fixture 组（YAML + 4 JSON，classifier-node 二进制保留给集成测试）、孤儿文件 classifier-source-expected.json。FINAL-REPORT 2.7 结构图同步更新。净删 686 行。
 - **Code review fixes (2026-08-13)**: `/code-review` found 15 findings (24 confirmed). Fixed in 4 commits:
   - `fa427b2` — comparison false negatives: exact large-integer comparison (f64 2^53 rounding), length-mismatch no longer hides prefix value diffs, Float64-widening round-trip precision guard, `.data_type` Int32→Int64 tolerance, zero-event warning
