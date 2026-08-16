@@ -43,7 +43,8 @@ assert!(outputs.is_some());
 | `test-sink` | 接收数据，与预期文件比对，写匹配结果 |
 | `echo-node` | 透传，验证链路连通性 |
 | `classifier-node` | 按阈值分流到两个输出 |
-| `distance-guard` | 示例节点：距离 < 0.5m 发急停（末端碰撞防护） |
+| `distance-guard` | 示例节点：距离小于安全阈值（`--safety-distance`，默认 0.5m）发急停 |
+| `trajectory-node` | 示例节点：7 关节轨迹线性插值（`--steps` 控制分辨率）—— Layer 3 回归 demo 的被测节点 |
 
 比对支持两种模式：**语义比对**（默认，转 Arrow 比数值，容忍 Int32 vs Int64 这类类型差异）和**严格比对**（JSON 逐值相等）。
 
