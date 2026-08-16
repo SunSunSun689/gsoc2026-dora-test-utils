@@ -5,9 +5,9 @@
 # Showcases all three testing layers:
 #   Layer 1: NodeHarness — unit-test a single node, no daemon
 #   Layer 2: TestSource/TestSink — integration testing via real
-#            dataflow YAMLs (echo, multi-echo, classifier)
-#   Layer 3: Record/Replay — regression testing on DORA's
-#            rust-dataflow example (upstream nodes unmodified)
+#            dataflow YAMLs (echo, multi-echo, distance-guard)
+#   Layer 3: Record/Replay — regression testing on a GEN72
+#            motion-control trajectory (interpolation resolution)
 #
 # Also runs the full test suite (116 tests).
 # ─────────────────────────────────────────────────────────────
@@ -89,11 +89,11 @@ else
     exit 1
 fi
 
-step "Build rust-dataflow example nodes (DORA upstream, unmodified)..."
-if PYO3_NO_PYTHON=1 cargo build -p rust-dataflow-example-node -p rust-dataflow-example-status-node --manifest-path dora/Cargo.toml > "$BUILD_LOG" 2>&1; then
+step "Build trajectory-node (GEN72 motion control)..."
+if cargo build --bin trajectory-node > "$BUILD_LOG" 2>&1; then
     tail -1 "$BUILD_LOG"
 else
-    warn "rust-dataflow example build failed! Last 20 lines:"
+    warn "trajectory-node build failed! Last 20 lines:"
     tail -20 "$BUILD_LOG"
     exit 1
 fi
@@ -174,7 +174,7 @@ run_integration_pipeline "tests/fixtures/distance-guard-dataflow.yml" \
     "tests/fixtures/result-distance.json"
 
 # ─── 4. Layer 3: Record/Replay demo ─────────────────────
-banner "4. Layer 3 — Record/Replay regression testing demo"
+banner "4. Layer 3 — Record/Replay regression demo (GEN72 trajectory)"
 
 DEMO="target/debug/examples/demo_replay"
 if [ -f "$DEMO" ]; then
@@ -238,7 +238,7 @@ echo -e "${GREEN}${BOLD}Summary:${NC}"
 echo "  • Layer 1 (NodeHarness):      unit testing without daemon — harness_demo"
 echo "  • Layer 2 (TestSource/Sink):  robot-arm pipelines — joint positions,";
 echo "                                 tool velocities, proximity safety stop"
-echo "  • Layer 3 (Record/Replay):    rust-dataflow example, upstream nodes unmodified"
+echo "  • Layer 3 (Record/Replay):    GEN72 trajectory — interpolation 10 → 5 steps"
 echo "  • ReplaySession (clean):      ignore_paths([count]) + ignore_sink(status) → is_clean() = true"
 echo "  • ReplaySession (regression): tick 10ms → 200ms → array length mismatch → DiffReport"
 echo "  • Full suite: 116 tests green (85 unit + 5 e2e + 4 record + 13 replay + 6 integration + 3 smoke)"
