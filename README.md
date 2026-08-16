@@ -1,253 +1,135 @@
-# GSoC 2026 Project: dora-test-utils
+# dora-test-utils
 
-为 [DORA](https://dora-rs.ai/) 数据流框架提供单元测试和集成测试支持的 Rust 工具库。
+为 [DORA](https://dora-rs.ai/) 数据流框架提供测试支持的 Rust 工具库。DORA 开发者可以用它像测试普通 Rust 代码一样测试自己的节点：**单节点测试不用起 daemon，整条流水线测试不改被测代码，回归测试录一次基线、以后自动比对**。
 
-## 三层测试支持
+## 三层测试怎么做
 
 ```
 ┌──────────────────────────────────────────────────┐
 │  Layer 1: NodeHarness — 单元测试                  │
-│  不放 daemon，直接用内存 channel 驱动单个节点     │
+│  不起 daemon，在 #[test] 里驱动单个节点            │
 ├──────────────────────────────────────────────────┤
-│  Layer 2: TestSource / TestSink — 集成测试       │
-│  扔进真实 YAML dataflow，端到端验证                │
+│  Layer 2: TestSource / TestSink — 集成测试        │
+│  写进真实 YAML dataflow，端到端验证               │
 ├──────────────────────────────────────────────────┤
 │  Layer 3: Record / Replay — 回归测试              │
-│  录制一次真实运行 → 之后每次重放比对               │
+│  录制一次真实运行 → 以后每次重放比对               │
 └──────────────────────────────────────────────────┘
 ```
 
-### Layer 1: NodeHarness（单元测试）
+### Layer 1：单元测试（NodeHarness）
 
-不需要启动 dora daemon，在 `#[test]` 里直接驱动节点：
+**机制**：NodeHarness 在测试进程里创建真实的 DORA 节点，输入用提前准备好的事件喂给它——不需要 daemon、不需要 YAML、不需要环境变量。测试代码注入输入、逐步驱动节点的事件循环、把节点产生的输出从内存通道取出来断言。
+
+推荐把节点业务逻辑抽成库函数：**逻辑只写一次**，测试直接断言这个函数（便宜、可穷举边界），再用 harness 跑一遍事件循环验证接线（数据解析、触发、输出）。两者互补——一个测"算得对不对"，一个测"接得对不对"。
 
 ```rust
-use dora_test_utils::NodeHarness;
-
-#[test]
-fn test_my_node() {
-    let mut harness = NodeHarness::new().expect("failed to create harness");
-
-    // Buffer input data (deferred init — node created on first tick)
-    harness.send_data("image", serde_json::json!([1, 2, 3]));
-
-    // Run to completion, collect all events
-    let events = harness.run_to_completion();
-    assert!(!events.is_empty());
-
-    // Collect node outputs
-    let outputs = harness.recv_output("result");
-    assert!(outputs.is_some());
-}
+let mut harness = NodeHarness::new()?;
+harness.send_data("image", serde_json::json!([1, 2, 3]));  // 注入输入
+while let Some(event) = harness.tick() { /* 节点逻辑处理事件 */ }
+let outputs = harness.recv_output("result");               // 捕获输出
+assert!(outputs.is_some());
 ```
 
-### Layer 2: TestSource + TestSink（集成测试）
+### Layer 2：集成测试（TestSource / TestSink）
 
-五个现成的二进制节点，直接写进 dataflow YAML 就能用：
+**机制**：不改被测节点代码，只在 YAML 里加两个现成节点——入口一个送料机（`test-source`，从 JSON 文件读数据逐个发出），出口一个质检员（`test-sink`，把收到的数据和预期文件比对，写 `match: true/false` 结果）。整条流水线用 `dora run` 真实跑一遍，CI 检查结果文件的 `match`。
+
+现成的二进制节点：
 
 | 二进制 | 作用 |
 |--------|------|
-| `test-source` | 从 JSON 文件读数据，发到 DORA 输出（支持多输出） |
-| `test-sink` | 接收 DORA 输入，跟预期文件比对，输出匹配结果 |
-| `echo-node` | 透传：收到啥发啥，用于验证链路通不通 |
-| `classifier-node` | 按阈值分流：Int64 数值 > 阈值发到 high，否则发到 low |
-| `distance-guard` | 具身智能示例：距离读数 < 0.5m 时发急停信号（末端碰撞防护） |
+| `test-source` | 从 JSON 文件读数据发到 DORA 输出（支持多输出） |
+| `test-sink` | 接收数据，与预期文件比对，写匹配结果 |
+| `echo-node` | 透传，验证链路连通性 |
+| `classifier-node` | 按阈值分流到两个输出 |
+| `distance-guard` | 示例节点：距离 < 0.5m 发急停（末端碰撞防护） |
 
-```yaml
-nodes:
-  - id: test-source
-    path: ./target/debug/test-source
-    args: "--output data:source.json"
-    outputs: [data]
-  - id: my-node
-    path: ./target/debug/my-node
-    inputs:
-      data: test-source/data
-    outputs: [result]
-  - id: test-sink
-    path: ./target/debug/test-sink
-    inputs:
-      result: my-node/result
-    args: "--expected-file expected.json --output-file result.json"
-```
+比对支持两种模式：**语义比对**（默认，转 Arrow 比数值，容忍 Int32 vs Int64 这类类型差异）和**严格比对**（JSON 逐值相等）。
 
-```bash
-dora run my-dataflow.yml --stop-after 10s
-cat result.json  # {"match": true} 或 {"match": false, "differences": [...]}
-```
+### Layer 3：回归测试（RecordSession / ReplaySession）
 
-### Layer 3: RecordSession / ReplaySession（回归测试）
+**机制**：给流水线拍一张"出厂合格照"——第一次跑时把每个质检员收到的数据录成基线（含接线图路径、dora 版本、超时等元数据）；以后代码或配置变了，重放一遍和基线自动比对，`is_clean()` 告诉你有没有回归，`DiffReport` 报出哪个 sink、哪个字段、从什么变成了什么。
 
-录制一次真实 dataflow 运行的输出，之后每次重放自动比对，检测回归：
+真实流水线总有非确定性噪音（tick 计数、时间戳、调试日志），用两个过滤原语声明跳过：
 
 ```rust
-use dora_test_utils::record::RecordSession;
-use std::time::Duration;
-
-// ── 录制基线 ──
-let recording = RecordSession::attach("dataflow.yml")?
-    .record_sink("test-sink", "sink_output.json")
-    .with_timeout(Duration::from_secs(10))
-    .run()?;
-recording.save("baseline.json")?;
-
-// ── 重放比对 ──
-let result = ReplaySession::load("baseline.json")?
-    .replay_sink("test-sink", "sink_output.json")
-    .with_timeout(Duration::from_secs(10))
-    .run()?;
-
-if result.is_clean() {
-    println!("No regressions detected");
-} else {
-    println!("{}", result.diff());  // structured diff report
-    result.assert_no_regression();  // panics with formatted diff
-}
+ReplaySession::load("baseline.json")?
+    .replay_sink("test-sink", "out.json")
+    .ignore_paths(&["count", "timestamp"])  // 跳过这些字段（支持后代如 data[0]）
+    .ignore_sink("debug-log")               // 跳过整个 sink
+    .run()?
+    .assert_no_regression();                // 有回归就 panic，CI 红
 ```
 
-**二层比对**：
-- Layer 1: 快速 JSON 结构 diff
-- Layer 2: Arrow 语义比对（容忍 Int32→Int64 等类型差异）
+比对分两层：JSON 结构 diff（快速定位）+ Arrow 语义比对（容忍类型差异）。DiffReport 区分 `Match` / `Mismatch` / `Missing` / `Extra` 四种状态，字段级差异带路径和前后值。
 
-**DiffReport** 支持 `Display` + `Serialize`，区分四种状态：
-- `Match` — 完全一致
-- `Mismatch` — 数据差异（含字段级路径和值）
-- `Missing` — 基线中有但重放中没有的 sink
-- `Extra` — 重放中有但基线中没有的 sink
+## 支持的数据类型
+
+- **整数**：Int8/16/32/64、UInt8/16/32/64（带溢出检查，超过 2^53 也精确比较）
+- **浮点**：Float32/64
+- **字符串**：String、LargeString
+- **其他**：Boolean、Null、数组、对象（Struct）
+
+注入和比对统一走 Arrow 线格式；JSON 输入通过 `data_type` 字段提示目标类型。
+
+## 可运行的 Demo
+
+全部围绕 **Realman GEN72 七轴机械臂** 一个主题，三层各自独立可跑：
+
+| Demo | 入口 | 内容 |
+|------|------|------|
+| 单元测试 | `cargo run --example harness_demo` | GEN72 关节限位监测：Part A 直测逻辑（含 J4/J6 不对称限位的边界用例）+ Part B 经 harness 跑事件循环 |
+| 集成测试 | `bash scripts/demo-integration.sh` | 三条真实流水线：七轴配置回传（echo）、关节位置 + 速度双路（multi-echo）、末端防撞急停（distance-guard，0.15m 读数触发 stop） |
+| 回归测试 | `cargo run --example demo_replay` | 轨迹插值节点录制基线（140 个轨迹值）→ 插值分辨率 10→5 步（真实运动控制回归）→ 检测 67 处差异 |
+| **一键总览** | `bash scripts/demo-final.sh` | 三层连放 + 完整测试套件；自动 clone dora 到 pin 住的 commit `1fba721` |
+
+另外 `demo/rust-dataflow.yml` 保留了工具对 DORA 官方 rust-dataflow example 零修改用法的参考示例。
 
 ## 快速上手
 
-### 前置条件
-
-- Rust 工具链
-- dora CLI（从 PATH 获取，或 `cargo install dora-cli --git https://github.com/dora-rs/dora.git`）
-
-### 编译所有二进制
+**前置条件**：Rust 工具链；跑集成/回归测试需要 dora CLI（demo-final.sh 会自动 clone 并构建）。
 
 ```bash
-cargo build --bin test-source --bin test-sink --bin echo-node --bin classifier-node --bin distance-guard
+# 构建全部二进制
+cargo build --bin test-source --bin test-sink --bin echo-node \
+    --bin classifier-node --bin distance-guard --bin trajectory-node
+
+# 跑测试（共 122 个：91 单元 + 5 e2e + 4 record + 13 replay + 6 integration + 3 smoke）
+cargo test --lib                          # 单元测试
+cargo test --test e2e_replay -- --test-threads=1   # 回归 e2e（需要 dora CLI）
+bash scripts/demo-final.sh                # 一键：三层 demo + 全部测试
 ```
-
-### 跑测试
-
-```bash
-# 库单元测试（85 个）
-cargo test --lib
-
-# 端到端测试（5 个）
-cargo test --test e2e
-
-# Record e2e 测试（4 个，需要 dora CLI）
-cargo test --test e2e_record -- --test-threads=1
-
-# Replay e2e 测试（13 个，需要 dora CLI）
-cargo test --test e2e_replay -- --test-threads=1
-
-# 集成测试（6 个，需要 dora CLI）
-cargo test --test integration -- --test-threads=1
-
-# 冒烟测试（3 个）
-cargo test --test smoke
-
-# 全部
-cargo test
-```
-
-### 演示脚本
-
-```bash
-bash scripts/demo-final.sh
-```
-
-一键展示全部三层测试能力：
-
-1. **Layer 1** — `examples/harness_demo.rs`：NodeHarness 单元测试，不起 daemon。场景：Realman GEN72 机械臂关节限位安全监测
-2. **Layer 2** — 三条机械臂主题的真实 dataflow 流水线：关节位置回传（echo）/ 关节位置 + 末端速度双路回传（multi-echo）/ 末端碰撞防护急停（distance-guard，0.15m 读数触发 stop）
-3. **Layer 3** — `examples/demo_replay.rs`：GEN72 关节空间运动控制——轨迹插值节点录制基线（`--steps 10`，140 个轨迹值）→ 变异插值分辨率（`--steps 5`）→ ReplaySession 检测回归（140→70 值 + 逐点差异）。`demo/rust-dataflow.yml` 保留为工具对 DORA 官方 example 零修改用法的附赠示例
-
-脚本自动 clone dora（pin 到 `1fba721`）、构建全部二进制、跑三个 demo、再跑完整 116 测试套件。
 
 ## 项目结构
 
 ```
-src/
-├── lib.rs          # crate 入口，模块声明 + API 稳定性表格
-├── harness.rs      # NodeHarness — 单元测试驱动（deferred-init 模型）
-├── source.rs       # TestSource — 数据注入库（JSON → Arrow 转换）
-├── sink.rs         # TestSink — 数据比对库（语义比对 + 严格比对）
-├── record.rs       # RecordSession + ReplaySession + DiffReport
-├── traits.rs       # IntoInputData trait
-├── mock/           # MockEventStream、MockOutputSender
-└── bin/
-    ├── test_source.rs    # test-source CLI
-    ├── test-sink.rs      # test-sink CLI
-    ├── classifier_node.rs # classifier-node CLI
-    └── distance_guard.rs # distance-guard CLI（末端碰撞防护示例）
-tests/
-├── fixtures/       # YAML dataflow、测试数据文件（静态可直接 dora run）
-├── echo-node.rs    # echo-node 二进制（透传）
-├── e2e.rs          # NodeHarness 端到端测试 (5)
-├── e2e_record.rs   # RecordSession e2e 测试 (4)
-├── e2e_replay.rs   # ReplaySession e2e 测试 (13)
-├── integration.rs  # 集成测试 (6)
-└── smoke.rs        # 冒烟测试 (3)
-docs/               # 设计文档、进度记录、upstream PR 计划
-scripts/            # Demo 脚本
+src/               # 库：harness（单元测试驱动）、source/sink（数据注入与比对）、
+                   #     record（录制/回放/差异报告）、mock（无 daemon mock）、
+                   #     bin/（test-source、test-sink、echo、classifier、
+                   #           distance-guard、trajectory-node 等二进制）
+tests/             # fixtures（静态 YAML + 数据文件，可直接 dora run）+
+                   # 各层测试套件
+examples/          # harness_demo.rs（Layer 1）、demo_replay.rs（Layer 3）
+demo/              # Layer 3 的接线图与数据文件
+scripts/           # demo-integration.sh（Layer 2）、demo-final.sh（总编排）
+docs/              # 设计文档、进度记录
 ```
 
 ## API 稳定性
 
-| API | 状态 | 说明 |
-|-----|------|------|
-| `NodeHarness` | **Stable** | 单元测试驱动，deferred-init 模型 |
-| `TestSource` / `TestSink` | **Stable** | JSON/Arrow 数据注入和比对 |
-| `MockEventStream` / `MockOutputSender` | **Stable** | 无 daemon mock 测试 |
-| `IntoInputData` trait | **Stable** | 数据注入 trait |
-| `RecordSession` / `Recording` | **Experimental** | 录制 dataflow 输出为基线 |
-| `ReplaySession` / `ReplayResult` | **Experimental** | 重放比对，检测回归 |
-| `DiffReport` / `SinkDiff` / `FieldDiff` | **Experimental** | 结构化差异报告 |
-
-## 测试统计（Week 12）
-
-| 类别 | 数量 | 位置 |
-|------|------|------|
-| 库单元测试 | 85 | `src/*.rs` |
-| 端到端测试 (e2e) | 5 | `tests/e2e.rs` |
-| Record e2e (e2e_record) | 4 | `tests/e2e_record.rs` |
-| Replay e2e (e2e_replay) | 13 | `tests/e2e_replay.rs` |
-| 集成测试 | 6 | `tests/integration.rs` |
-| 冒烟测试 | 3 | `tests/smoke.rs` |
-| **总计** | **116** | |
+| API | 状态 |
+|-----|------|
+| `NodeHarness`、`TestSource`/`TestSink`、`MockEventStream`/`MockOutputSender`、`IntoInputData` | **Stable** |
+| `RecordSession`/`Recording`、`ReplaySession`/`ReplayResult`、`DiffReport` 系列 | **Experimental** |
 
 ## CI
 
-5 个 CI jobs：
-
-- **check** — `cargo check`
-- **test** — `cargo test --lib` + e2e + smoke + integration + e2e_record + e2e_replay
-- **clippy** — `cargo clippy -- -D warnings`
-- **fmt** — `cargo fmt --check`
-- **integration-test** — 编译 dora CLI + test 二进制 + 集成测试 + record/replay e2e
-
-GitHub Actions 配置在 `.github/workflows/ci.yml`。
+`.github/workflows/ci.yml` 五个 job：`check`、`test`（lib + e2e + smoke）、`clippy`、`fmt`、`integration-test`（clone dora 到 pin 住的 commit、构建 CLI、串行跑集成 + record/replay e2e，30 分钟上限）。
 
 ## 进度
 
-| Week | 内容 | 状态 |
-|------|------|------|
-| 1-2 | API 设计 + 脚手架 | ✅ |
-| 3-4 | NodeHarness 核心实现 | ✅ |
-| 5 | TestSource + TestSink 库 + CLI | ✅ |
-| 6 | Echo 流水线 + 集成测试 | ✅ |
-| 7 | 边界测试 + CI 集成 | ✅ |
-| 8 | 多输出 + classifier + 3 条流水线 | ✅ |
-| 9 | flume→tokio mpsc + RecordSession | ✅ |
-| 10 | ReplaySession + code review 修复 | ✅ |
-| 11 | DORA upgrade (45436aad→1fba721) + flume removed + integration test fix | ✅ |
-| 12 | Docs polish + demo refinement | 🚧 |
-| 13 | Final submission | ⏳ |
-
-详见 [`docs/PROGRESS.md`](docs/PROGRESS.md)。
+Week 1-11 全部完成（API 设计、NodeHarness、TestSource/TestSink、CI、Record/Replay、DORA 升级）；Week 12-13 完成 demo 打磨（三层 GEN72 主题化 + 两轮 code review 修复）。详见 [`docs/PROGRESS.md`](docs/PROGRESS.md)。
 
 ## 许可
 
