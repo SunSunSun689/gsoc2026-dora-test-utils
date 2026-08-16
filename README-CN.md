@@ -134,7 +134,7 @@ docs/              # 设计文档、进度记录
 
 ## 进度
 
-Week 1-11 全部完成（API 设计、NodeHarness、TestSource/TestSink、CI、Record/Replay、DORA 升级）；Week 12-13 完成 demo 打磨（三层 GEN72 主题化 + 两轮 code review 修复）。详见 [`docs/PROGRESS.md`](docs/PROGRESS.md)。
+Week 1-11 全部完成（API 设计、NodeHarness、TestSource/TestSink、CI、Record/Replay、DORA 升级）；Week 12-13 完成 demo 打磨（三层 GEN72 主题化、每层内置抓错演示、回归基线提交进仓库、双语 README、两轮 code review 修复）；**PR #44 已于 2026-08-16 合并进 dora-rs/gsoc2026-dora-test-utils 的 main 分支**。详见 [`docs/PROGRESS.md`](docs/PROGRESS.md)。
 
 ## 许可
 

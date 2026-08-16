@@ -133,7 +133,7 @@ docs/              # design docs, progress log
 
 ## Progress
 
-Weeks 1-11 complete (API design, NodeHarness, TestSource/TestSink, CI, Record/Replay, DORA upgrade); weeks 12-13 polished the demos (three-layer GEN72 theme + two code-review rounds). See [`docs/PROGRESS.md`](docs/PROGRESS.md).
+Weeks 1-11 complete (API design, NodeHarness, TestSource/TestSink, CI, Record/Replay, DORA upgrade); weeks 12-13 polished the demos (three-layer GEN72 theme, error-catch demonstrations in every layer, the regression baseline committed to the repo, bilingual READMEs, two code-review rounds); **PR #44 was merged into dora-rs/gsoc2026-dora-test-utils main on 2026-08-16**. See [`docs/PROGRESS.md`](docs/PROGRESS.md).
 
 ## License
 
