@@ -1,10 +1,10 @@
-# Distance-guard pipeline — end-effector proximity safety for a robot arm.
+# Distance-guard pipeline — GEN72 end-effector proximity safety.
 #
-# test-source emits Float64 distance readings from a proximity sensor;
-# distance-guard emits a safety flag per reading (0 = safe, 1 = stop when
-# closer than 0.5 m); test-sink compares the flag stream against the
-# expected file.  The 3rd reading (0.15 m) is inside the safety radius
-# and must trigger a stop.
+# test-source emits Float64 distance readings from the arm's proximity
+# sensor; distance-guard emits a safety flag per reading (0 = safe,
+# 1 = stop when closer than 0.5 m); test-sink compares the flag stream
+# against the expected file.  The 3rd reading (0.15 m) is inside the
+# safety radius and must trigger a stop.
 #
 # Node args are relative to this file's directory (dora spawns nodes
 # there), so the file works as-is:

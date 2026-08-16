@@ -1,8 +1,9 @@
 # Multi-output echo pipeline — test-source emits on two outputs,
 # each goes through an echo node to a dedicated sink.
 #
-# Embodied-AI theme: a robot arm's state stream — data_a carries joint
-# positions, data_b carries tool velocities — routed to two consumers.
+# Embodied-AI theme: a Realman GEN72 state stream — data_a carries the
+# 7 joint positions (J1..J7) of a configuration, data_b carries the 7
+# joint velocities — routed to two consumers.
 #
 # Verifies multi-output support in test-source and proper routing
 # in multi-node dataflows.

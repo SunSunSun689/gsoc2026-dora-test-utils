@@ -162,14 +162,14 @@ run_integration_pipeline() {
     done
 }
 
-step "Pipeline 1/3: echo — joint positions relayed through an echo node"
+step "Pipeline 1/3: echo — GEN72 7-joint configuration (J1..J7) relayed"
 run_integration_pipeline "tests/fixtures/echo-dataflow.yml" "tests/fixtures/result.json"
 
-step "Pipeline 2/3: multi-echo — joint positions + tool velocities, two sinks"
+step "Pipeline 2/3: multi-echo — GEN72 joint positions + joint velocities, two sinks"
 run_integration_pipeline "tests/fixtures/multi-echo-dataflow.yml" \
     "tests/fixtures/result-a.json" "tests/fixtures/result-b.json"
 
-step "Pipeline 3/3: distance-guard — proximity safety stop (0.15 m inside the safety radius)"
+step "Pipeline 3/3: distance-guard — GEN72 end-effector proximity stop (0.15 m inside the safety radius)"
 run_integration_pipeline "tests/fixtures/distance-guard-dataflow.yml" \
     "tests/fixtures/result-distance.json"
 
