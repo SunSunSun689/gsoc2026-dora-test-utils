@@ -53,10 +53,25 @@ pub fn run_test_source(config: SourceConfig) -> Result<()> {
     let (mut node, _events) =
         DoraNode::init_from_env().context("failed to initialize DORA node")?;
 
+    // Let downstream subscribers install their input subscriptions
+    // before emitting — messages sent in the registration window are
+    // dropped (late-subscriber race, observed at dataflow start).
+    std::thread::sleep(std::time::Duration::from_millis(500));
+
     for spec in &config.outputs {
         emit_output(&mut node, spec)
             .with_context(|| format!("failed to emit output '{}'", spec.output_id))?;
     }
+
+    // Linger briefly so the daemon can deliver every queued message.
+    // Exiting right after send_output closes the input stream while
+    // messages are still in flight, and the daemon drops them
+    // nondeterministically — observed at ~7+ emitted values (the
+    // trajectory demo sends 14).  A fixed linger keeps the dataflow
+    // teardown fast (no need to wait for --stop-after).
+
+    std::thread::sleep(std::time::Duration::from_secs(2));
+
     Ok(())
 }
 
