@@ -100,7 +100,10 @@ fn main() {
 
     step("safe configuration (all joints at 0°)");
     let safe = vec![0.0; 7];
-    println!("    first_joint_violation = {:?}", node_logic::first_joint_violation(&safe));
+    println!(
+        "    first_joint_violation = {:?}",
+        node_logic::first_joint_violation(&safe)
+    );
     if node_logic::first_joint_violation(&safe).is_some() {
         fail("all-zero configuration should be safe");
     }
