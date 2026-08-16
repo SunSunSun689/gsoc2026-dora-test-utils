@@ -24,7 +24,6 @@
 - **Three-layer demo (2026-08-13)**: `demo-final.sh` now showcases ALL testing layers — Layer 1 `harness_demo` (NodeHarness, no daemon), Layer 2 three integration pipelines (echo/multi-echo/classifier with expected-file comparison, fixture YAMLs fixed to YAML-dir-relative paths), Layer 3 Record/Replay. `demo/README.md` added. Verified end-to-end: exit 0, 116/116 tests ✅
 - **harness_demo 结构改造 (2026-08-16)**: demo 从"逻辑内联在测试循环"改为展示推荐结构——`node_logic` 模块（代表节点的 lib.rs）写一次，Part A 纯逻辑普通断言直测，Part B 事件循环经 NodeHarness 驱动并调用同一逻辑函数（只改写收发壳子，零复制）。场景改为 Realman GEN72 机械臂关节限位监测（J1-J7 官方限位，含 J4/J6 不对称限位）。
 - **集成测试 demo 具身智能化 (2026-08-16)**: Layer 2 三条流水线从泛用场景改为 GEN72 机械臂主题——echo（七轴配置 J1..J7 回传，与 harness_demo 同一安全姿态）、multi-echo（关节位置 + 关节速度双路）、distance-guard（末端碰撞防护，0.15m 读数触发急停）。新增 `src/bin/distance-guard.rs` 节点二进制。三条流水线端到端验证 match:true，expected_count 7。
-- **集成测试 demo 具身智能化 (2026-08-16, 修订)**: Layer 2 三条流水线从泛用场景改为机械臂主题——echo（关节位置回传）、multi-echo（关节位置 + 末端速度双路）、distance-guard（末端碰撞防护，0.15m 读数触发急停）。新增 `src/bin/distance-guard.rs` 节点二进制。三条流水线端到端验证 match:true。
 - **Code review fixes (2026-08-13)**: `/code-review` found 15 findings (24 confirmed). Fixed in 4 commits:
   - `fa427b2` — comparison false negatives: exact large-integer comparison (f64 2^53 rounding), length-mismatch no longer hides prefix value diffs, Float64-widening round-trip precision guard, `.data_type` Int32→Int64 tolerance, zero-event warning
   - `c1c971d` — harness/mock: panic on post-init dropped events, unbounded MockOutputSender channel, removed broken `Default` impl
