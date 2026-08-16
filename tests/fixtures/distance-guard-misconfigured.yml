@@ -1,0 +1,31 @@
+# Distance-guard pipeline — MISCONFIGURED variant (error-catch demo).
+#
+# Same pipeline as distance-guard-dataflow.yml, but the safety distance
+# was set too low: --safety-distance 0.1 m instead of 0.5 m (a realistic
+# misconfiguration — the arm would NOT stop for obstacles at 0.15 m).
+# The expected file still encodes the CORRECT behavior, so test-sink
+# must report match:false — the error-catch demonstration of Layer 2.
+#
+# Node args are relative to this file's directory (dora spawns nodes
+# there), so the file works as-is.
+
+nodes:
+  - id: test-source
+    path: ../../target/debug/test-source
+    args: "--output-id distance --data-file source-distance.json"
+    outputs:
+      - distance
+
+  - id: distance-guard
+    path: ../../target/debug/distance-guard
+    args: "--safety-distance 0.1"
+    inputs:
+      distance: test-source/distance
+    outputs:
+      - safety
+
+  - id: test-sink
+    path: ../../target/debug/test-sink
+    inputs:
+      safety: distance-guard/safety
+    args: "--expected-file expected-distance.json --output-file result-distance-misconfigured.json"

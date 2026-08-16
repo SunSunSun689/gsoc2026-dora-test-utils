@@ -327,6 +327,8 @@ pub struct ReplaySession {
     sinks: Vec<(String, PathBuf)>,
     dataflow_override: Option<PathBuf>,
     timeout_override: Option<Duration>,
+    ignore_paths: Vec<String>,
+    ignore_sinks: Vec<String>,
 }
 
 impl ReplaySession {
@@ -341,6 +343,8 @@ impl ReplaySession {
             sinks: Vec::new(),
             dataflow_override: None,
             timeout_override: None,
+            ignore_paths: Vec::new(),
+            ignore_sinks: Vec::new(),
         })
     }
 
@@ -370,6 +374,31 @@ impl ReplaySession {
         self
     }
 
+    /// JSON field paths to skip during comparison.
+    ///
+    /// Paths are matched against internal diff paths (e.g. `.count`, `.data[0]`).
+    /// Both forms are accepted: `"count"` and `".count"` match the same field.
+    /// Calling this replaces the previously configured list — unlike
+    /// `ignore_sink`, which appends. Call once with all paths, or call again
+    /// to override the list.
+    pub fn ignore_paths(mut self, paths: &[&str]) -> Self {
+        self.ignore_paths = paths
+            .iter()
+            .map(|s| s.strip_prefix('.').unwrap_or(s).to_string())
+            .collect();
+        self
+    }
+
+    /// Skip a sink entirely during comparison.
+    ///
+    /// The sink is removed from both baseline and current maps. If the sink
+    /// does not exist in either, it is silently ignored. Call repeatedly for
+    /// multiple sinks, or call once per sink.
+    pub fn ignore_sink(mut self, sink_id: &str) -> Self {
+        self.ignore_sinks.push(sink_id.to_string());
+        self
+    }
+
     /// Execute the replay and compare against the baseline.
     ///
     /// Runs `dora run <yaml> --stop-after <N>s`, collects sink outputs,
@@ -384,7 +413,13 @@ impl ReplaySession {
         // before surfacing as a confusing SinkOutputMissing error.
         // Sinks in the baseline that AREN'T registered will be reported as
         // Missing in the DiffReport (see compare_recordings).
+        // Sinks registered via ignore_sink() are exempt — the comparison
+        // layer removes them from both sides, so requiring them to exist
+        // here would contradict the "silently ignored" contract.
         for (sink_id, _) in &self.sinks {
+            if self.ignore_sinks.contains(sink_id) {
+                continue;
+            }
             if !self.recording.sinks.contains_key(sink_id) {
                 return Err(ReplayError::SinkNotInBaseline(sink_id.clone()));
             }
@@ -465,9 +500,15 @@ impl ReplaySession {
             });
         }
 
-        // Collect current sink outputs.
+        // Collect current sink outputs.  Ignored sinks are skipped entirely —
+        // they play no role in the comparison, and requiring their output
+        // files would crash replays where the ignored sink legitimately
+        // produced nothing (e.g. removed from the mutated YAML).
         let mut current_sinks = HashMap::new();
         for (sink_id, output_file) in &self.sinks {
+            if self.ignore_sinks.contains(sink_id) {
+                continue;
+            }
             if !output_file.exists() {
                 return Err(ReplayError::SinkOutputMissing {
                     sink_id: sink_id.clone(),
@@ -488,7 +529,30 @@ impl ReplaySession {
         }
 
         // Compare.
-        let report = compare_recordings(&self.recording.sinks, &current_sinks);
+        let report = compare_recordings(
+            &self.recording.sinks,
+            &current_sinks,
+            &self.ignore_paths,
+            &self.ignore_sinks,
+        );
+
+        // Warn when a compared sink recorded zero events in BOTH runs —
+        // the comparison is vacuously clean and may hide a dead pipeline
+        // (e.g. a typo'd input id in the YAML both runs share).
+        for (sink_id, baseline_value) in &self.recording.sinks {
+            let both_empty = baseline_value.get("count").and_then(|c| c.as_u64()) == Some(0)
+                && current_sinks
+                    .get(sink_id)
+                    .and_then(|v| v.get("count"))
+                    .and_then(|c| c.as_u64())
+                    == Some(0);
+            if both_empty {
+                eprintln!(
+                    "warning: sink '{sink_id}' recorded zero events in both the baseline and \
+                     this run — the comparison is vacuously clean; the pipeline may be dead"
+                );
+            }
+        }
 
         // Build metadata reflecting the actual values used (overrides applied).
         let mut effective_metadata = self.recording.metadata.clone();
@@ -605,30 +669,57 @@ impl RecordSession {
         // ── 2. Get dora version ────────────────────────────────
         let dora_version = get_dora_version(&dora).unwrap_or_else(|_| "unknown".to_string());
 
-        // ── 2b. Delete stale output files ───────────────────────
-        for (_, output_file) in &self.sinks {
-            let _ = std::fs::remove_file(output_file);
+        // ── 2b. Move stale output files aside ───────────────────
+        // Previous runs' outputs are renamed to <file>.bak instead of
+        // deleted: if dora run fails, they are restored, so a failed
+        // run never destroys the user's previous data.  Backups are
+        // removed only after a successful run.
+        let backups: Vec<(PathBuf, PathBuf)> = self
+            .sinks
+            .iter()
+            .map(|(_, output_file)| {
+                let backup = PathBuf::from(format!("{}.bak", output_file.display()));
+                (output_file.clone(), backup)
+            })
+            .collect();
+        for (output_file, backup) in &backups {
+            if output_file.exists() {
+                let _ = std::fs::rename(output_file, backup);
+            }
         }
+        // Restore backups on any error path below.
+        let restore = |backups: &[(PathBuf, PathBuf)]| {
+            for (output_file, backup) in backups {
+                if backup.exists() {
+                    let _ = std::fs::rename(backup, output_file);
+                }
+            }
+        };
 
         // ── 3. Run dora run ────────────────────────────────────
         // ceil to whole seconds (dora CLI duration-str parser v0.5.1
         // only accepts integer-duration format like "10s").
         let timeout_secs = self.timeout.as_secs_f64().max(0.1).ceil() as u64;
         let stop_after = format!("{}s", timeout_secs);
-        let yaml_str = self.dataflow_yaml.to_str().ok_or_else(|| {
-            RecordError::Io(std::io::Error::new(
-                std::io::ErrorKind::InvalidInput,
-                format!(
-                    "dataflow YAML path is not valid UTF-8: {}",
-                    self.dataflow_yaml.display()
-                ),
-            ))
-        })?;
+        let yaml_str = match self.dataflow_yaml.to_str() {
+            Some(s) => s,
+            None => {
+                restore(&backups);
+                return Err(RecordError::Io(std::io::Error::new(
+                    std::io::ErrorKind::InvalidInput,
+                    format!(
+                        "dataflow YAML path is not valid UTF-8: {}",
+                        self.dataflow_yaml.display()
+                    ),
+                )));
+            }
+        };
 
         let output = Command::new(&dora)
             .args(["run", yaml_str, "--stop-after", &stop_after])
             .output()
             .map_err(|e| {
+                restore(&backups);
                 if e.kind() == std::io::ErrorKind::NotFound {
                     RecordError::DoraNotFound(dora.display().to_string())
                 } else {
@@ -637,6 +728,7 @@ impl RecordSession {
             })?;
 
         if !output.status.success() {
+            restore(&backups);
             return Err(RecordError::RunFailed {
                 status: output.status.to_string(),
                 stderr: String::from_utf8_lossy(&output.stderr).to_string(),
@@ -647,25 +739,36 @@ impl RecordSession {
         let mut sinks = HashMap::new();
         for (sink_id, output_file) in &self.sinks {
             if !output_file.exists() {
+                restore(&backups);
                 return Err(RecordError::SinkOutputMissing {
                     sink_id: sink_id.clone(),
                     path: output_file.clone(),
                 });
             }
 
-            let contents =
-                std::fs::read_to_string(output_file).map_err(|e| RecordError::SinkReadError {
+            let contents = std::fs::read_to_string(output_file).map_err(|e| {
+                restore(&backups);
+                RecordError::SinkReadError {
                     sink_id: sink_id.clone(),
                     error: e.to_string(),
-                })?;
+                }
+            })?;
 
-            let value: serde_json::Value =
-                serde_json::from_str(&contents).map_err(|e| RecordError::SinkReadError {
+            let value: serde_json::Value = serde_json::from_str(&contents).map_err(|e| {
+                restore(&backups);
+                RecordError::SinkReadError {
                     sink_id: sink_id.clone(),
                     error: format!("invalid JSON: {e}"),
-                })?;
+                }
+            })?;
 
             sinks.insert(sink_id.clone(), value);
+        }
+
+        // Run succeeded and all outputs were collected — the backups
+        // are stale now; drop them.
+        for (_, backup) in &backups {
+            let _ = std::fs::remove_file(backup);
         }
 
         // ── 5. Build recording ─────────────────────────────────
@@ -757,14 +860,25 @@ fn get_dora_version(dora_binary: &Path) -> Result<String, RecordError> {
 fn compare_recordings(
     baseline: &HashMap<String, serde_json::Value>,
     current: &HashMap<String, serde_json::Value>,
+    ignore_paths: &[String],
+    ignore_sinks: &[String],
 ) -> DiffReport {
     let mut regressions = Vec::new();
 
+    // Clone maps and remove ignored sinks before comparison.
+    let mut baseline = baseline.clone();
+    let mut current = current.clone();
+    for sink_id in ignore_sinks {
+        baseline.remove(sink_id);
+        current.remove(sink_id);
+    }
+
     // Check baseline sinks present in current.
-    for (sink_id, baseline_value) in baseline {
+    for (sink_id, baseline_value) in &baseline {
         match current.get(sink_id) {
             Some(current_value) => {
-                let differences = compare_sink_outputs(sink_id, baseline_value, current_value);
+                let differences =
+                    compare_sink_outputs(sink_id, baseline_value, current_value, ignore_paths);
                 regressions.push(SinkDiff {
                     sink_id: sink_id.clone(),
                     status: if differences.is_empty() {
@@ -806,6 +920,7 @@ fn compare_sink_outputs(
     _sink_id: &str,
     baseline: &serde_json::Value,
     current: &serde_json::Value,
+    ignore_paths: &[String],
 ) -> Vec<FieldDiff> {
     let mut diffs = Vec::new();
     json_diff("", baseline, current, &mut diffs);
@@ -855,6 +970,37 @@ fn compare_sink_outputs(
             }
         }
     }
+
+    // Tolerate .data_type changes when the data values themselves match —
+    // the Arrow semantic layer exists to allow Int32→Int64 and similar
+    // type drifts (consistent with TestSink's semantic comparison).
+    // Note: semantic paths are dotless ("data[2]") while JSON-layer paths
+    // are dot-prefixed (".data[2]") — check both forms.
+    let data_clean = !diffs.iter().any(|d| {
+        let p = d.path.strip_prefix('.').unwrap_or(&d.path);
+        p == "data" || p.starts_with("data[")
+    });
+    if data_clean && diffs.iter().any(|d| d.path == ".data_type") {
+        diffs.retain(|d| d.path != ".data_type");
+    }
+
+    // Filter out user-requested ignore paths.
+    // Normalize: strip leading dots from both the generated path and the
+    // ignore entry so "count" and ".count" match the same field.
+    //
+    // An entry also covers structured descendants: "data" matches
+    // "data[0]", "data[2].x" and "data.length" — otherwise ignoring a
+    // whole volatile field would be a silent no-op for its array indices.
+    diffs.retain(|d| {
+        let normalized = d.path.strip_prefix('.').unwrap_or(&d.path);
+        !ignore_paths.iter().any(|ip| {
+            let entry = ip.strip_prefix('.').unwrap_or(ip);
+            normalized == entry
+                || normalized
+                    .strip_prefix(entry)
+                    .is_some_and(|rest| rest.starts_with('[') || rest.starts_with('.'))
+        })
+    });
 
     diffs
 }
@@ -918,12 +1064,23 @@ fn json_diff(
         _ => {
             // serde_json::Value::Number cross-type comparison (PosInt vs Float)
             // always returns false even for numerically equal values (e.g. 3 vs
-            // 3.0).  Normalize through f64 before comparing so metadata fields
-            // like "count" don't produce spurious Mismatch on representation
-            // changes.
+            // 3.0).  Normalize before comparing so metadata fields like "count"
+            // don't produce spurious Mismatch on representation changes.
+            //
+            // Integers must compare EXACTLY: f64 has a 53-bit mantissa, so
+            // integers above 2^53 (u64 counters, ns timestamps) would round to
+            // the same f64 and compare equal — a false Match hiding a real
+            // regression.  Only fall back to f64 for float-vs-int or
+            // float-vs-float pairs (where 3 vs 3.0 should still match).
             let is_eq = match (baseline, current) {
                 (serde_json::Value::Number(a), serde_json::Value::Number(b)) => {
-                    a.as_f64() == b.as_f64()
+                    match (a.as_i64(), b.as_i64()) {
+                        (Some(ai), Some(bi)) => ai == bi,
+                        _ => match (a.as_u64(), b.as_u64()) {
+                            (Some(au), Some(bu)) => au == bu,
+                            _ => a.as_f64() == b.as_f64(),
+                        },
+                    }
                 }
                 _ => baseline == current,
             };
@@ -982,16 +1139,12 @@ fn compare_data_semantic(
     let b_len = baseline_refs.len();
     let c_len = c_arrays.len();
 
-    if b_len != c_len {
-        return vec![FieldDiff {
-            path: "data.length".into(),
-            baseline: serde_json::json!(b_len),
-            current: serde_json::json!(c_len),
-        }];
-    }
-
+    // Compare the overlapping prefix element-by-element even when the
+    // lengths differ — a length change must not hide value regressions
+    // inside the shared prefix (e.g. [1,2,3] → [1,2,99,4] is both a
+    // value regression at index 2 AND a length change).
     let mut diffs = Vec::new();
-    for i in 0..b_len {
+    for i in 0..b_len.min(c_len) {
         let result = sink::compare_semantic(&[baseline_refs[i]], &c_arrays[i..i + 1], None);
         if !result.r#match {
             for d in &result.differences {
@@ -1002,6 +1155,14 @@ fn compare_data_semantic(
                 });
             }
         }
+    }
+
+    if b_len != c_len {
+        diffs.push(FieldDiff {
+            path: "data.length".into(),
+            baseline: serde_json::json!(b_len),
+            current: serde_json::json!(c_len),
+        });
     }
     diffs
 }
@@ -1052,7 +1213,7 @@ mod tests {
     fn test_compare_identical() {
         let baseline: serde_json::Value = serde_json::json!({"data": [1, 2, 3], "count": 3});
         let current = baseline.clone();
-        let diffs = compare_sink_outputs("test", &baseline, &current);
+        let diffs = compare_sink_outputs("test", &baseline, &current, &[]);
         assert!(diffs.is_empty(), "identical outputs should have no diffs");
     }
 
@@ -1060,7 +1221,7 @@ mod tests {
     fn test_compare_count_diff() {
         let baseline = serde_json::json!({"data": [1, 2, 3], "count": 3});
         let current = serde_json::json!({"data": [1, 2, 3], "count": 4});
-        let diffs = compare_sink_outputs("test", &baseline, &current);
+        let diffs = compare_sink_outputs("test", &baseline, &current, &[]);
         assert_eq!(diffs.len(), 1);
         assert!(diffs[0].path.contains("count"));
     }
@@ -1069,7 +1230,7 @@ mod tests {
     fn test_compare_data_diff() {
         let baseline = serde_json::json!({"data": [1, 2, 3], "count": 3});
         let current = serde_json::json!({"data": [1, 2, 99], "count": 3});
-        let diffs = compare_sink_outputs("test", &baseline, &current);
+        let diffs = compare_sink_outputs("test", &baseline, &current, &[]);
         assert!(!diffs.is_empty(), "data difference should be detected");
     }
 
@@ -1157,7 +1318,7 @@ mod tests {
         baseline.insert("s1".into(), serde_json::json!({"data": [1, 2], "count": 2}));
         let mut current = HashMap::new();
         current.insert("s1".into(), serde_json::json!({"data": [1, 2], "count": 2}));
-        let report = compare_recordings(&baseline, &current);
+        let report = compare_recordings(&baseline, &current, &[], &[]);
         assert_eq!(report.regressions.len(), 1);
         assert_eq!(report.regressions[0].status, DiffStatus::Match);
     }
@@ -1168,7 +1329,7 @@ mod tests {
         baseline.insert("s1".into(), serde_json::json!({"data": [1]}));
         baseline.insert("s2".into(), serde_json::json!({"data": [2]}));
         let current = HashMap::new(); // both missing
-        let report = compare_recordings(&baseline, &current);
+        let report = compare_recordings(&baseline, &current, &[], &[]);
         assert_eq!(report.regressions.len(), 2);
         assert!(report
             .regressions
@@ -1181,7 +1342,7 @@ mod tests {
         let baseline = HashMap::new();
         let mut current = HashMap::new();
         current.insert("s1".into(), serde_json::json!({"data": [1]}));
-        let report = compare_recordings(&baseline, &current);
+        let report = compare_recordings(&baseline, &current, &[], &[]);
         assert_eq!(report.regressions.len(), 1);
         assert_eq!(report.regressions[0].status, DiffStatus::Extra);
     }
@@ -1195,7 +1356,7 @@ mod tests {
         current.insert("match-sink".into(), serde_json::json!({"data": [1]}));
         current.insert("mismatch-sink".into(), serde_json::json!({"data": [99]}));
         current.insert("extra-sink".into(), serde_json::json!({"data": [3]}));
-        let report = compare_recordings(&baseline, &current);
+        let report = compare_recordings(&baseline, &current, &[], &[]);
 
         let statuses: Vec<_> = report
             .regressions
@@ -1215,17 +1376,27 @@ mod tests {
     // ── compare_sink_outputs: .data prefix fix ──────────────────
 
     #[test]
-    fn test_data_type_diff_preserved() {
-        // .data identical but .data_type differs — should NOT be stripped
-        // by the .data prefix retain (fix #1).
+    fn test_data_type_diff_tolerated_when_data_matches() {
+        // .data identical but .data_type differs (Int32 → Int64) — the
+        // Arrow semantic layer's type tolerance means this is NOT a
+        // regression: the .data_type diff is dropped when the data
+        // values match, consistent with TestSink's semantic comparison
+        // (see sink::test_compare_semantic_cross_type_int32_vs_int64).
         let baseline = serde_json::json!({"data": [1, 2, 3], "data_type": "Int32", "count": 3});
         let current = serde_json::json!({"data": [1, 2, 3], "data_type": "Int64", "count": 3});
-        let diffs = compare_sink_outputs("test", &baseline, &current);
-        // .data_type differs and starts_with(".data") was the bug — should
-        // now be preserved as a FieldDiff.
+        let diffs = compare_sink_outputs("test", &baseline, &current, &[]);
+        assert!(
+            !diffs.iter().any(|d| d.path.contains("data_type")),
+            "data_type diff should be tolerated when data matches, got diffs: {diffs:?}"
+        );
+
+        // When the data values ALSO differ, the .data_type diff must be
+        // preserved alongside the value diffs.
+        let current = serde_json::json!({"data": [1, 2, 99], "data_type": "Int64", "count": 3});
+        let diffs = compare_sink_outputs("test", &baseline, &current, &[]);
         assert!(
             diffs.iter().any(|d| d.path.contains("data_type")),
-            "data_type diff should be preserved, got diffs: {diffs:?}"
+            "data_type diff should be preserved when data also differs, got diffs: {diffs:?}"
         );
     }
 
@@ -1234,7 +1405,7 @@ mod tests {
         // .data itself differs — should trigger semantic comparison.
         let baseline = serde_json::json!({"data": [1, 2, 3], "count": 3});
         let current = serde_json::json!({"data": [1, 2, 99], "count": 3});
-        let diffs = compare_sink_outputs("test", &baseline, &current);
+        let diffs = compare_sink_outputs("test", &baseline, &current, &[]);
         assert!(!diffs.is_empty(), "data difference should be detected");
     }
 
@@ -1317,6 +1488,54 @@ mod tests {
         assert!(!diffs.is_empty());
     }
 
+    #[test]
+    fn test_compare_data_semantic_length_and_prefix_value() {
+        // A length change must not hide value regressions in the shared
+        // prefix: [1,2,3] → [1,2,99,4] reports BOTH the index-2 value
+        // change and the length change.
+        let baseline = serde_json::json!([1, 2, 3]);
+        let current = serde_json::json!([1, 2, 99, 4]);
+        let diffs = compare_data_semantic(&baseline, &current);
+        assert!(
+            diffs.iter().any(|d| d.path == "data.length"),
+            "length diff missing: {diffs:?}"
+        );
+        assert!(
+            diffs.iter().any(|d| d.path == "data[2]"),
+            "prefix value diff at data[2] missing: {diffs:?}"
+        );
+    }
+
+    // ── json_diff integer precision ──────────────────────────────
+
+    #[test]
+    fn test_json_diff_large_integers_exact() {
+        // Integers above 2^53 must compare exactly — f64 comparison
+        // would round both to the same value and report a false Match.
+        let baseline = serde_json::json!({"count": 9007199254740993u64});
+        let current = serde_json::json!({"count": 9007199254740992u64});
+        let mut diffs = Vec::new();
+        json_diff("", &baseline, &current, &mut diffs);
+        assert_eq!(diffs.len(), 1, "large integer diff must be reported");
+
+        // Equal large integers must compare clean.
+        let baseline = serde_json::json!({"count": 9007199254740993u64});
+        let current = baseline.clone();
+        let mut diffs = Vec::new();
+        json_diff("", &baseline, &current, &mut diffs);
+        assert!(diffs.is_empty());
+    }
+
+    #[test]
+    fn test_json_diff_int_float_representation_still_matches() {
+        // 3 vs 3.0 must still match (representation change, same value).
+        let baseline = serde_json::json!({"count": 3});
+        let current = serde_json::json!({"count": 3.0});
+        let mut diffs = Vec::new();
+        json_diff("", &baseline, &current, &mut diffs);
+        assert!(diffs.is_empty());
+    }
+
     // ── DiffReport edge cases ───────────────────────────────────
 
     #[test]
@@ -1367,5 +1586,161 @@ mod tests {
         let display = report.to_string();
         assert!(display.contains("No regressions"));
         assert!(display.contains("2 sinks"));
+    }
+
+    // ── ignore_paths / ignore_sink filtering ─────────────────────
+
+    #[test]
+    fn ignore_paths_filters_count_field() {
+        // Two recordings that differ only in .count — filtering .count makes them clean.
+        let baseline: HashMap<String, serde_json::Value> = [(
+            "sink-1".into(),
+            serde_json::json!({"data": [1, 2, 3], "count": 3}),
+        )]
+        .into();
+        let current: HashMap<String, serde_json::Value> = [(
+            "sink-1".into(),
+            serde_json::json!({"data": [1, 2, 3], "count": 5}),
+        )]
+        .into();
+
+        // Without filtering — regression
+        let report = compare_recordings(&baseline, &current, &[], &[]);
+        assert!(!report.regressions.is_empty());
+        assert_eq!(report.regressions[0].status, DiffStatus::Mismatch);
+
+        // With filtering — clean
+        let report = compare_recordings(&baseline, &current, &["count".to_string()], &[]);
+        assert!(
+            report.regressions.is_empty()
+                || report
+                    .regressions
+                    .iter()
+                    .all(|r| r.status == DiffStatus::Match)
+        );
+    }
+
+    #[test]
+    fn ignore_paths_accepts_leading_dot() {
+        let baseline: HashMap<String, serde_json::Value> =
+            [("sink-1".into(), serde_json::json!({"count": 3}))].into();
+        let current: HashMap<String, serde_json::Value> =
+            [("sink-1".into(), serde_json::json!({"count": 5}))].into();
+
+        // ".count" should work the same as "count"
+        let report = compare_recordings(&baseline, &current, &[".count".to_string()], &[]);
+        assert!(
+            report.regressions.is_empty()
+                || report
+                    .regressions
+                    .iter()
+                    .all(|r| r.status == DiffStatus::Match)
+        );
+    }
+
+    #[test]
+    fn ignore_paths_covers_structured_descendants() {
+        // ignore_paths(&["data"]) must cover array elements ("data[1]")
+        // and semantic diffs ("data.length") — otherwise ignoring a whole
+        // volatile field is a silent no-op.
+        let baseline: HashMap<String, serde_json::Value> = [(
+            "sink-1".into(),
+            serde_json::json!({"data": [1, 2, 3], "count": 3}),
+        )]
+        .into();
+        let current: HashMap<String, serde_json::Value> = [(
+            "sink-1".into(),
+            serde_json::json!({"data": [1, 2, 99, 4], "count": 4}),
+        )]
+        .into();
+
+        let report = compare_recordings(&baseline, &current, &["data".to_string()], &[]);
+        let clean = report.regressions.is_empty()
+            || report
+                .regressions
+                .iter()
+                .all(|r| r.status == DiffStatus::Match);
+        assert!(
+            !clean,
+            "ignoring 'data' should NOT filter 'count' — a real diff must remain"
+        );
+
+        // Ignoring both "data" and "count" should make it clean.
+        let report = compare_recordings(
+            &baseline,
+            &current,
+            &["data".to_string(), "count".to_string()],
+            &[],
+        );
+        assert!(
+            report.regressions.is_empty()
+                || report
+                    .regressions
+                    .iter()
+                    .all(|r| r.status == DiffStatus::Match),
+            "ignoring data + count should leave no diffs, got {report:?}"
+        );
+    }
+
+    #[test]
+    fn ignore_sink_removes_sink_from_comparison() {
+        let baseline: HashMap<String, serde_json::Value> = [
+            ("keep".into(), serde_json::json!({"x": 1})),
+            ("drop".into(), serde_json::json!({"x": 2})),
+        ]
+        .into();
+        let current: HashMap<String, serde_json::Value> = [
+            ("keep".into(), serde_json::json!({"x": 1})),
+            ("drop".into(), serde_json::json!({"x": 999})), // massive diff, but ignored
+        ]
+        .into();
+
+        let report = compare_recordings(&baseline, &current, &[], &["drop".to_string()]);
+        // Only "keep" should be in the report
+        assert_eq!(report.regressions.len(), 1);
+        assert_eq!(report.regressions[0].sink_id, "keep");
+        assert_eq!(report.regressions[0].status, DiffStatus::Match);
+    }
+
+    #[test]
+    fn ignore_sink_unknown_id_silent() {
+        let baseline: HashMap<String, serde_json::Value> =
+            [("sink-1".into(), serde_json::json!({"x": 1}))].into();
+        let current = baseline.clone();
+
+        // Should not panic for non-existent sink ID
+        let report = compare_recordings(&baseline, &current, &[], &["nonexistent".to_string()]);
+        assert_eq!(report.regressions.len(), 1);
+        assert_eq!(report.regressions[0].status, DiffStatus::Match);
+    }
+
+    #[test]
+    fn replay_result_is_clean_with_filters() {
+        let baseline: HashMap<String, serde_json::Value> = [(
+            "sink-1".into(),
+            serde_json::json!({"data": [1, 2], "count": 2}),
+        )]
+        .into();
+        let current: HashMap<String, serde_json::Value> = [(
+            "sink-1".into(),
+            serde_json::json!({"data": [1, 2], "count": 99}),
+        )]
+        .into();
+
+        let report = compare_recordings(&baseline, &current, &["count".to_string()], &[]);
+
+        let metadata = RecordingMetadata {
+            dataflow_yaml: "/tmp/test.yml".into(),
+            recorded_at_unix: 0,
+            timeout_secs: 10.0,
+            dora_version: "test".into(),
+        };
+        let result = ReplayResult {
+            metadata,
+            baseline_sinks: baseline,
+            current_sinks: current,
+            report,
+        };
+        assert!(result.is_clean());
     }
 }

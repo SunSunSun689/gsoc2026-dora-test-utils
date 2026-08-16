@@ -1,0 +1,31 @@
+# Distance-guard pipeline — GEN72 end-effector proximity safety.
+#
+# test-source emits Float64 distance readings from the arm's proximity
+# sensor; distance-guard emits a safety flag per reading (0 = safe,
+# 1 = stop when closer than 0.5 m); test-sink compares the flag stream
+# against the expected file.  The 3rd reading (0.15 m) is inside the
+# safety radius and must trigger a stop.
+#
+# Node args are relative to this file's directory (dora spawns nodes
+# there), so the file works as-is:
+#   dora run tests/fixtures/distance-guard-dataflow.yml --stop-after 15s
+
+nodes:
+  - id: test-source
+    path: ../../target/debug/test-source
+    args: "--output-id distance --data-file source-distance.json"
+    outputs:
+      - distance
+
+  - id: distance-guard
+    path: ../../target/debug/distance-guard
+    inputs:
+      distance: test-source/distance
+    outputs:
+      - safety
+
+  - id: test-sink
+    path: ../../target/debug/test-sink
+    inputs:
+      safety: distance-guard/safety
+    args: "--expected-file expected-distance.json --output-file result-distance.json"

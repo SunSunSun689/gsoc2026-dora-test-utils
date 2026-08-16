@@ -1,11 +1,106 @@
 # Progress Log
 
+## Week 12 后半 (2026-08-12): Field filtering for ReplaySession
+
+### Changes
+
+- **`src/record.rs`**: Added `ignore_paths` and `ignore_sink` builder methods to `ReplaySession`; filtering wired into `compare_recordings` and `compare_sink_outputs`
+- **`examples/demo_replay.rs`**: Rewritten to use DORA `rust-dataflow` example (unmodified upstream nodes) with filtering demo
+- **`demo/rust-dataflow.yml`**: Added `test-sink-random` node for recording deterministic UInt64 output
+- **`tests/e2e_replay.rs`**: Added e2e test for ignore_paths filtering
+- **`scripts/demo-final.sh`**: Auto-clone dora, build rust-dataflow example nodes
+
+### Verification
+
+- `cargo check` ✅
+- `cargo fmt --check` ✅
+- `cargo clippy --lib` ✅
+- `cargo test --lib` ✅ (85/85 pass)
+- `cargo test --test e2e_replay -- --test-threads=1` ✅ (12/12 pass)
+- Full suite: 116 tests (85 lib + 5 e2e + 4 e2e_record + 13 e2e_replay + 6 integration + 3 smoke)
+- `scripts/demo-final.sh` end-to-end ✅ (exit 0; regression detected: data.length 100→48)
+- **Generality check**: multi-echo dataflow (2 outputs + 2 echo nodes + 2 sinks) — regression detected in both sinks ✅ → added as e2e test `replay_regression_multi_echo_topology`
+- **Static YAML refactor (2026-08-13)**: demo now runs `demo/rust-dataflow.yml` directly — no runtime YAML generation (dora resolves relative paths against the YAML's own directory). Deleted ~60 lines of generation code + redundant `demo/rust-dataflow-baseline.yml`. Real users point at their own static YAML; the demo now shows exactly that pattern. Verified end-to-end ✅
+- **Three-layer demo (2026-08-13)**: `demo-final.sh` now showcases ALL testing layers — Layer 1 `harness_demo` (NodeHarness, no daemon), Layer 2 three integration pipelines (echo/multi-echo/classifier with expected-file comparison, fixture YAMLs fixed to YAML-dir-relative paths), Layer 3 Record/Replay. `demo/README.md` added. Verified end-to-end: exit 0, 116/116 tests ✅
+- **harness_demo 结构改造 (2026-08-16)**: demo 从"逻辑内联在测试循环"改为展示推荐结构——`node_logic` 模块（代表节点的 lib.rs）写一次，Part A 纯逻辑普通断言直测，Part B 事件循环经 NodeHarness 驱动并调用同一逻辑函数（只改写收发壳子，零复制）。场景改为 Realman GEN72 机械臂关节限位监测（J1-J7 官方限位，含 J4/J6 不对称限位）。
+- **集成测试 demo 具身智能化 (2026-08-16)**: Layer 2 三条流水线从泛用场景改为 GEN72 机械臂主题——echo（七轴配置 J1..J7 回传，与 harness_demo 同一安全姿态）、multi-echo（关节位置 + 关节速度双路）、distance-guard（末端碰撞防护，0.15m 读数触发急停）。新增 `src/bin/distance-guard.rs` 节点二进制。三条流水线端到端验证 match:true，expected_count 7。
+- **三层 demo GEN72 化 + 独立化 (2026-08-16)**: 
+  - Layer 3 回归 demo 从 rust-dataflow 随机数场景换成 GEN72 关节空间运动控制——新增 `src/bin/trajectory-node.rs`（7 关节线性插值，`--steps` 参数），baseline `--steps 10` 录 140 个轨迹值，mutated `--steps 5` 触发真实运动控制回归（70 值 + 65 处逐点值差异 + count + length 共 67 diffs）。rust-dataflow YAML 保留为附赠官方示例。
+  - 三层 demo 独立化：Layer 1 `cargo run --example harness_demo`；Layer 2 新增 `scripts/demo-integration.sh`（独立脚本）；Layer 3 `cargo run --example demo_replay`；`demo-final.sh` 降级为编排者。
+  - **关键 bug 修复**：test-source 发完立即退出导致 daemon 丢弃在途消息（轨迹 demo 14 个值丢 4-7 个，非确定性）——加 500ms 发前等待（晚订阅竞态）+ 2s 发后驻留（收尾竞态）。修复后 8 次连续运行全部 140/140。
+  - 验证：demo-final.sh 全流程 exit 0；e2e_record 4/4、e2e_replay 13/13、integration 6/6；91 lib。
+- **清理 (2026-08-16)**: 删除被 demo-final.sh 取代的三个旧脚本（demo.sh / demo-week8.sh / demo-week12.sh）、退役的 classifier fixture 组（YAML + 4 JSON，classifier-node 二进制保留给集成测试）、孤儿文件 classifier-source-expected.json。FINAL-REPORT 2.7 结构图同步更新。净删 686 行。
+- **抓错演示补全 (2026-08-16)**: 此前只有 Layer 3 演示了"捕获错误"，Layer 1/2 只有绿色路径。补上：harness_demo 新增 Part C（故意造 bug——J4 限位 55° 打成 200°——断言失败信息完整展示）；distance-guard 支持 `--safety-distance` 参数，新增配错版 fixture（0.5→0.1m，0.15m 障碍物不再急停），demo-integration.sh 第 4 条流水线期望 match:false 并展示被抓住的差异。三层现在都有"绿色路径 + 抓错演示"完整闭环。验证：demo-final.sh exit 0。
+- **第二轮 code review 修复 (2026-08-16)**: `/code-review` 针对轨迹 demo 找出 8 个 finding（其中 2 个已提前修复被自动排除），全部修复：demo_replay 删除死的 `--dora` 参数（sessions 内部解析 CLI）及其越界解析、Step 1 断言轨迹值 == 140（消息丢失时录制期即大声失败而非静默演示空内容）、test-source 的 sleep 改为具名常量并在 standalone 模式跳过、trajectory-node `--steps 0/缺失` 报错 + 尾部驻留、demo-final.sh 过期 summary 文案修正 + SKIP_BUILD 委托避免重复构建、README Layer 3 文案更新、顺带清掉遗留的 PI approx_constant 和 needless borrow（clippy --all-targets 现在 0 警告）。验证：demo-final.sh exit 0、integration 4/4、轨迹 3×140、91 lib。
+- **Code review fixes (2026-08-13)**: `/code-review` found 15 findings (24 confirmed). Fixed in 4 commits:
+  - `fa427b2` — comparison false negatives: exact large-integer comparison (f64 2^53 rounding), length-mismatch no longer hides prefix value diffs, Float64-widening round-trip precision guard, `.data_type` Int32→Int64 tolerance, zero-event warning
+  - `c1c971d` — harness/mock: panic on post-init dropped events, unbounded MockOutputSender channel, removed broken `Default` impl
+  - `b8b1449` — demo/CI: clean-replay `data.length` jitter tolerance, stale result-file cleanup, timeouts 120→240 + CI `timeout-minutes: 30`
+  - ignore semantics: `ignore_sink` no longer validated/crashes, `ignore_paths` covers `data[i]` descendants, RecordSession backup-restore (.bak) on failed runs
+  - Test counts: 91 lib / **122 total**. Demo end-to-end verified (exit 0, no .bak residue)
+
+### PR
+
+- **[PR #44](https://github.com/dora-rs/gsoc2026-dora-test-utils/pull/44)** opened against `main` (2026-08-13)
+- 13 commits: filtering feature + unit/e2e tests + demo rewrite + script + polish
+
+## Week 11 后半 (2026-08-10): Demo bug fix — 3 bugs in demo_replay.rs
+
+### Context
+
+`scripts/demo-final.sh` Step 4 未检测到回归，`is_clean()` 始终返回 `true`。
+
+### Root cause (3 bugs)
+
+| # | Bug | Impact |
+|---|-----|--------|
+| 1 | Step 4 未调用 `.dataflow(&mutated_yaml)` — ReplaySession 始终使用 baseline metadata 中的原始 YAML | 永远比较 baseline vs. baseline → `is_clean() = true` |
+| 2 | `rust-dataflow` example 输出非确定性 — `status-node` 输出嵌入了 `after N ticks`，N 取决于两次独立 `dora run` 的 timer 启动时机（毫秒级抖动） | Step 2 clean replay 也报假 regression |
+| 3 | YAML 中使用相对路径 — dora spawn 节点的工作目录不是 repo root，`--data-file demo/xxx.json` 找不到文件 | dataflow 启动失败 |
+
+### Fix
+
+- **Bug 1**: 在 Step 4 的 ReplaySession 链中添加 `.dataflow(&mutated_yaml)`
+- **Bug 2**: Demo 从 `rust-dataflow` example 切换到**确定性 echo pipeline**（test-source → echo-node → test-sink）。test-source 从固定 JSON 文件读取数据，每次输出完全一致
+- **Bug 3**: `demo_replay.rs` 动态生成临时 YAML，所有路径使用**绝对路径**（与 integration tests 一致）
+
+### Files changed
+
+| File | Change |
+|------|--------|
+| `examples/demo_replay.rs` | 重写：`generate_yaml()` 生成绝对路径 YAML + echo pipeline + `.dataflow()` fix |
+| `scripts/demo-final.sh` | dora example build 替换为 echo-node build |
+| `demo/demo-source-baseline.json` | NEW — 确定性源数据 `[10, 20, 30]` |
+| `demo/demo-source-mutated.json` | NEW — 变异源数据 `[10, 20, 30, 999]` |
+| `demo/demo-baseline.yml` | 改为参考文件（运行时生成绝对路径版本） |
+| `demo/demo-mutated.yml` | 同上 |
+
+### Verification
+
+```
+Step 1 (Record baseline):       ✅ baseline json saved
+Step 2 (Replay same YAML):      ✅ is_clean() = true, assert_no_regression() passed
+Step 3 (Show mutated YAML):     ✅ mutated YAML ready
+Step 4 (Replay mutated YAML):   ✅ is_clean() = false
+    DiffReport: .count: Number(3) -> Number(4)
+                data.length: Number(3) -> Number(4)
+    assert_no_regression() panics correctly ✅
+```
+
+- `cargo build --example demo_replay` ✅
+- Full lib + e2e test suite unchanged (109 tests)
+
+### Design note
+
+Demo 中使用确定性 echo pipeline 而非 DORA `rust-dataflow` example 的原因是：两个独立的 `dora run` 之间 timer 启动有毫秒级抖动，`status-node` 输出中的 `after N ticks` 不稳定（N=0 或 1）。保留 `demo/rust-dataflow.yml` 和 `demo/rust-dataflow-mutated.yml` 作为参考文件。工具同样适用于任何确定性 DORA 数据流。
+
 ## DORA Version
 
-**Pinned**: `45436aad124fe46463d0b0411e3922dae8ee9ebd`
-**Confirmed**: 2026-06-01 Weekly Sync (Discussion #17), mentor ZhangHanDong
-**Reason**: Stable baseline for all development; predates v1.0.0-rc.1
-**Dependency**: `dora-node-api = { git = "...", rev = "45436aad..." }` (git dep, no vendored clone)
+**Pinned**: `1fba7214b79d8488229f6cc2027b9760dec4d6df` (was `45436aad`)
+**Updated**: 2026-08-09 — flume→tokio migration merged upstream; no upstream PR needed
+**Confirmed**: 2026-06-01 Weekly Sync (Discussion #17), mentor ZhangHanDong (original `45436aad`)
+**Reason**: `1fba721` is the commit that migrated `TestingOutput::ToChannel` from flume to tokio mpsc
+**Dependency**: `dora-node-api = { git = "...", rev = "1fba721..." }` (git dep, no vendored clone)
 **Upstream tracking**: [dora-rs/dora#2855](https://github.com/dora-rs/dora/issues/2855)
 
 > On 2026-07-27 we evaluated upgrading to v1.0.0-rc.4 and latest main.
@@ -165,6 +260,18 @@ Code review of the Week 10 ReplaySession implementation found 15 issues.
 - `cargo test --test e2e_replay -- --test-threads=1` ✅ (11/11 pass)
 - `cargo test --test smoke -- --test-threads=1` ✅ (3/3 pass)
 
+## Week 10 后半 (2026-08-03): Weekly Sync discussion posts
+
+### Changes
+
+- **`docs/discussions/weekly-sync-posts.md`**: 4 weekly sync discussion posts for GitHub Discussions (Week 8/9/10/12), covering all work since mid-July
+
+### Verification
+
+- Posts are ready to copy-paste to GitHub Discussions, Category: `Weekly Sync`
+
+---
+
 ## Week 12 (2026-08-02): Demo script, README, edge-case tests
 
 ### Changes
@@ -189,15 +296,125 @@ Code review of the Week 10 ReplaySession implementation found 15 issues.
 - `cargo test --lib` ✅ (80/80 pass)
 - `cargo test --test e2e` ✅ (5/5 pass)
 
-## Remaining Plan (Adjusted 2026-07-27)
+### Week 12 后半 (2026-08-09): Docs polish — reflect DORA upgrade
+
+Updated all docs to reflect Week 11 changes:
+
+| File | Changes |
+|------|---------|
+| `README.md` | Test counts 81→109, Week 11 status, CI description |
+| `docs/ISSUES-FOR-MENTOR.md` | Issue 1 (flume) → Resolved; Issue 2 (silent test) → Fixed; Summary table updated |
+| `docs/upstream-pr-plan.md` | PR (a) status banner — upstream already merged |
+| `docs/mentor-checkpoints-week10.md` | DORA version updated from `45436aad` to `1fba721` |
+| `docs/WEEKLY_REPORT-week10-12.md` | Q4: Upstream PR (a) resolved |
+| `docs/CI-DEADLOCK-FIX.md` | Resolution note at top |
+| `docs/discussions/weekly-sync-posts.md` | Q3 resolved, Upstream PR references updated |
+
+### Commits
+
+| Commit | Description |
+|--------|-------------|
+| `a63a38b` | docs: Week 12 — update all docs for DORA upgrade and resolved issues |
+
+### Verification
+
+- `cargo test --lib` ✅ (80/80 pass)
+
+## Week 11 (2026-08-09): DORA upgrade + integration test fix + demo polish
+
+### 1. DORA dep upgrade — flume→tokio already migrated upstream
+
+Upstream dora-rs/dora **main** already migrated `TestingOutput::ToChannel`
+from `flume::Sender` to `tokio::sync::mpsc::UnboundedSender` (commit `1fba721`,
+2026-08-04).  Week 11's planned Upstream PR (a) was not needed.
+
+| File | Change |
+|------|--------|
+| `Cargo.toml` | DORA rev: `45436aad` → `1fba721`; arrow: 58 → 59; removed `flume = "0.10"` |
+| `src/harness.rs` | `flume::unbounded()` → `unbounded_channel()`; types → `UnboundedSender`/`UnboundedReceiver` |
+| `src/lib.rs` | Updated doc comment about output channel |
+
+### 2. Fix: integration tests no longer silently pass (Issue #2)
+
+6 integration tests in `tests/integration.rs` silently returned green when
+`dora` CLI was missing.  Replaced `dora_available()` guard with `require_dora()`:
+panics in CI (`CI=true`), prints visible ⚠️ warning locally and skips.
+
+### 3. Demo polish
+
+Rewrote `examples/demo_replay.rs` for final submission quality:
+- `--dora` and `--dataflow` CLI flags
+- `CARGO_BIN_EXE_*` env var for bin discovery
+- Precondition checks with build hints
+- Recording metadata + sink data preview
+- `assert_no_regression()` panic verification
+- Structured 4-step output with ✅/❌ markers
+
+Also updated `scripts/demo-week12.sh` for week11 branch.
+
+### 4. Final-review polish wave (2026-08-12)
+
+Final whole-branch review of week11: **MERGE verdict, no blocking findings**.
+5 non-blocking polish items applied in one commit `97b01d0`:
+
+1. Demo no longer claims "exactly 100" events — on a loaded machine node startup
+   can eat into the 10s window, so counts are stated as "~100"
+   (`examples/demo_replay.rs`)
+2. `check_bin` build hint corrected for DORA upstream nodes:
+   `cargo build -p rust-dataflow-example-node --manifest-path dora/Cargo.toml`
+3. `ReplaySession::ignore_paths` doc now states it **replaces** the previous list
+   (unlike `ignore_sink`, which appends) (`src/record.rs`)
+4. Deleted stale echo-era demo files: `demo/demo-baseline.yml`,
+   `demo/demo-mutated.yml`, `demo/demo-source-baseline.json`,
+   `demo/demo-source-mutated.json` — unreferenced by the new rust-dataflow demo
+5. `scripts/demo-final.sh` Step 0 now verifies the dora checkout is at the pinned
+   commit `1fba721` (via `git rev-parse --short HEAD`) and warns with
+   re-clone/checkout guidance on mismatch
+
+### Verification (2026-08-12)
+
+- `cargo build --example demo_replay` ✅
+- `cargo fmt --check` ✅
+- `cargo clippy --lib -- -D warnings` ✅ (zero warnings)
+- `cargo test --lib` ✅ (85/85 pass)
+
+### Commits
+
+| Commit | Description |
+|--------|-------------|
+| `169680e` | feat: upgrade DORA dep 45436aad → 1fba721, remove flume |
+| `c1897ee` | fix: integration tests no longer silently pass when dora CLI is missing |
+| `99d42ea` | docs(demo): enhance demo_replay — CLI args, structured output, metadata display |
+| `97b01d0` | polish: address final-review feedback — demo claims, build hints, pin check, stale files |
+
+### Verification
+
+- `cargo check` ✅
+- `cargo fmt --check` ✅
+- `cargo clippy --lib` ✅ (zero warnings)
+- `cargo test --lib` ✅ (80/80 pass)
+- `cargo test --test e2e -- --test-threads=1` ✅ (5/5 pass)
+- `cargo test --test e2e_record -- --test-threads=1` ✅ (4/4 pass)
+- `cargo test --test e2e_replay -- --test-threads=1` ✅ (11/11 pass)
+- `cargo test --test smoke -- --test-threads=1` ✅ (3/3 pass)
+- `cargo test --test integration -- --test-threads=1` ✅ (6/6 pass)
+
+### Resolved
+
+- ~~Upstream PR (a): ToChannel flume→tokio~~ — upstream already did it
+- ~~`flume = "0.10"` dependency~~ — removed
+- ~~`harness.rs` TODO comment~~ — resolved
+- ~~Integration tests silent pass (Issue #2)~~ — CI panics, local warns
+
+## Remaining Plan (Adjusted 2026-08-09)
 
 | Week | Dates (China, Mon–Sun) | Deliverable |
 |------|------|------|
 | 9 后半 | 7/22–7/27 | `RecordSession::attach()` + `run()` + `save()` + 4 tests |
 | 10 | 7/28–8/3 | `ReplaySession::load()` + `run()` + `assert_no_regression()` + diff + 5-8 tests |
-| 11 | 8/4–8/10 | Upstream PR (a): `ToChannel` flume→tokio + regression test examples + integration |
-| 12 | 8/11–8/17 | Debug + edge cases + docs polish |
-| 13 | 8/18–8/24 | Demo prep + final submission (Coding Phase 2 deadline) |
+| 11 | 8/4–8/10 | ~~Upstream PR (a)~~ → Update DORA rev to post-migration commit + switch harness to tokio mpsc |
+| 12 | 8/11–8/17 | ~~Debug + edge cases + docs polish~~ → docs done (2026-08-09), edge cases done (Week 10) |
+| 13 | 8/18–8/24 | ~~Demo prep + final submission~~ → ✅ 已提前完成 (2026-08-09) — report + demo + CI 全部就绪 |
 
 ## Week 9 后半 (2026-07-21): PR #35 merge conflicts + CI fix
 
@@ -285,8 +502,56 @@ Code review of the Week 10 ReplaySession implementation found 15 issues.
 | `src/lib.rs` | pub mod record + re-exports |
 | `tests/e2e_record.rs` | NEW — 4 e2e tests |
 
+## Week 13 (2026-08-09): Final submission
+
+Week 13 (8/18–8/24) is the final coding phase week — Coding Phase 2 ends
+2026-08-24 23:59 UTC. All final submission deliverables prepared.
+
+### Changes
+
+- **`docs/FINAL-REPORT.md`**: GSoC 2026 final report — project summary, 109-test
+  coverage contract, API stability table, deferred items (296 lines)
+- **`scripts/demo-final.sh`**: final submission demo script — build + Record/Replay
+  regression demo + full test suite (163 lines)
+- **`demo/rust-dataflow.yml`**: DORA 官方 rust-dataflow example + test-sink 录制
+- **`demo/rust-dataflow-mutated.yml`**: 同上，timer 100ms→50ms（触发回归）
+- **`examples/demo_replay.rs`**: 重写 — 使用静态 YAML 文件，不再动态生成
+- **`.github/workflows/ci.yml`**: dora clone pin 45436aad → 1fba721
+
+### Demo 设计
+
+Demo 从 trivial echo pipeline 升级为 DORA 官方 `rust-dataflow` example：
+- rust-node 和 rust-status-node **一行不改**（证明工具的非侵入性）
+- 只加一个 test-sink 节点（1 行 YAML）= 回归测试能力
+- 回归触发：timer 100ms→50ms，输出频率翻倍 → DiffReport 检测到 count 差异
+
+- **`docs/WEEKLY_REPORT-week13.md`**: mentor 周报 — Week 11–13 成果总结
+
+### Commits
+
+| Commit | Description |
+|--------|-------------|
+| `7a0201a` | docs: add GSoC 2026 final report |
+| `5a82d31` | feat: add final submission demo script |
+| `76d5173` | fix(ci): update dora clone pin 45436aad → 1fba721 |
+| `53f0c1b` | fix(demo): add dora clone prerequisite check and cd guard |
+| `6881771` | docs: update FINAL-REPORT.md commit count |
+| `b7b09d5` | docs: fix PROGRESS.md Week 13 — add missing commit, fix demo description |
+| `e20f472` | feat(demo): add rust-dataflow YAML with test-sink for recording |
+| `d0ab9f8` | feat(demo): add mutated rust-dataflow YAML (timer 100→50ms) |
+| `751b0a9` | feat(demo): use DORA rust-dataflow example for Record/Replay demo |
+| `ee01ca7` | fix(demo): build dora example packages in demo-final.sh |
+| `37007c5` | fix(demo): correct YAML paths for demo/ directory |
+| `96ff23e` | docs: update PROGRESS.md — Week 13 demo redesign + full commit log |
+
+### Test counts
+
+- Unchanged: **109 tests** across 6 categories (80 lib + 5 e2e + 4 e2e_record +
+  11 e2e_replay + 6 integration + 3 smoke) — same as Week 11 final counts
+
 ## Deferred / Post-Submission
 
+- ~~Upstream PR (a): `ToChannel` flume→tokio~~ — ✅ done (upstream `1fba721`, consumed 2026-08-09)
 - Upstream PR (b): `TestingInput::Channel` API proposal (follow-up)
 - Python bindings (stretch goal)
 - Investigate parallel NodeHarness deadlock root cause in DORA upstream

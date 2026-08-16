@@ -1,7 +1,11 @@
 # DORA Upstream 贡献计划
 
 > 基于 mentor ZhangHanDong 在 Discussion #20 (Week 3) 和 Discussion #28 (Week 7) 的指导。
-> 两个 PR 有先后顺序：先 (a) 后 (b)。(a) 是独立的小改动，容易合入；(b) 是新增 API，需要 maintainer 讨论。
+
+**Status (2026-08-09)**: PR (a) 上游已自行完成（commit `1fba721`，2026-08-04）。
+我们已于 Week 11 升级 DORA dep → `1fba721`，移除 `flume` 依赖，切换 `harness.rs`
+到 `tokio::sync::mpsc::unbounded_channel()`。详见 `docs/PROGRESS.md` Week 11。
+PR (b) 是 `TestingInput::Channel` API 提案，延后至 post-submission。
 
 ---
 

@@ -1,172 +1,193 @@
-//! Week 12 Demo — Record/Replay regression testing showcase.
+//! dora-test-utils Demo — Record/Replay regression testing (Layer 3).
 //!
-//! Demonstrates the full RecordSession → ReplaySession workflow:
-//!   1. Record a baseline from an echo pipeline
-//!   2. Replay → assert_no_regression() (clean)
-//!   3. Mutate the source data
-//!   4. Replay → detect regression with structured diff
+//! GEN72 joint-space motion control scenario: a trajectory node linearly
+//! interpolates the 7 joints toward two target configurations.  The demo
+//! records the resulting trajectory, replays it unchanged (clean), then
+//! replays a MUTATED dataflow — the interpolation resolution changed from
+//! 10 to 5 steps (a real motion-control regression: someone edited the
+//! trajectory parameter) — and the regression is detected.
+//!
+//! Runs the static dataflow files in `demo/` — the same way a real user
+//! would point the tool at their own YAML:
+//!   - `demo/trajectory-baseline.yml` — interpolation --steps 10
+//!   - `demo/trajectory-mutated.yml`  — interpolation --steps 5
+//!
+//! The trajectory output is pure computation, so it is fully
+//! deterministic and needs no filtering.  For real pipelines with
+//! non-deterministic noise (timestamps, tick counts, debug logs),
+//! `ReplaySession::ignore_paths` / `ignore_sink` skip those fields —
+//! see README and tests/e2e_replay.rs.
+//!
+//! Run from the repo root (demo-final.sh does this automatically).
 
 use dora_test_utils::record::{RecordSession, ReplaySession};
 use std::path::PathBuf;
-use std::process::Command;
 use std::time::Duration;
 
-fn bin_path(name: &str) -> PathBuf {
-    let target_dir = std::env::var("CARGO_TARGET_DIR").unwrap_or_else(|_| "target".to_string());
-    let profile = if cfg!(debug_assertions) {
-        "debug"
-    } else {
-        "release"
-    };
-    PathBuf::from(&target_dir).join(profile).join(name)
+// ── Helpers ────────────────────────────────────────────────
+// Note: the dora CLI is located inside RecordSession/ReplaySession
+// (dora/target/{debug,release}/dora, then PATH) — demo-final.sh
+// verifies the checkout is pinned at the expected commit before
+// running this demo.
+
+fn section(title: &str) {
+    println!("\n═══ {} ═══\n", title);
+}
+fn step(msg: &str) {
+    println!("▸ {msg}");
+}
+fn ok(msg: &str) {
+    println!("  ✅ {msg}");
+}
+fn fail(msg: &str) -> ! {
+    eprintln!("  ❌ {msg}");
+    std::process::exit(1);
 }
 
-fn dora_binary() -> PathBuf {
-    for profile in &["debug", "release"] {
-        let local = PathBuf::from("dora/target").join(profile).join("dora");
-        if local.exists() {
-            return local;
-        }
+/// Print the diff report, truncated for readability in the demo.
+fn print_diff_trimmed(diff: &dora_test_utils::DiffReport, max_lines: usize) {
+    let text = diff.to_string();
+    let lines: Vec<&str> = text.lines().collect();
+    let shown = lines.len().min(max_lines);
+    for line in &lines[..shown] {
+        println!("    {line}");
     }
-    PathBuf::from("dora")
+    if lines.len() > max_lines {
+        println!("    … ({} more lines)", lines.len() - max_lines);
+    }
 }
+
+// ── Main ───────────────────────────────────────────────────
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    println!("══════════════════════════════════════════════");
-    println!("  dora-test-utils — Week 12 Demo");
-    println!("  Record/Replay Regression Testing");
-    println!("══════════════════════════════════════════════\n");
+    section("dora-test-utils — Record/Replay Demo (Layer 3: regression testing)");
+    println!("  GEN72 joint-space motion control — trajectory interpolation");
+    println!("  Static dataflow files under demo/ — no YAML generation");
+    println!();
 
-    // ── 0. Check dora CLI ─────────────────────────────
-    let dora = dora_binary();
-    let has_dora = Command::new(&dora)
-        .arg("--version")
-        .output()
-        .map(|o| o.status.success())
-        .unwrap_or(false);
+    ok("prerequisites: dora CLI resolved by RecordSession/ReplaySession");
 
-    if !has_dora {
-        eprintln!("SKIP: dora CLI not available");
-        eprintln!("Build with: PYO3_NO_PYTHON=1 cargo build --bin dora --manifest-path dora/binaries/cli/Cargo.toml");
-        return Ok(());
-    }
-    println!("▶ dora CLI: {}\n", dora.display());
-
-    // ── 1. Setup ─────────────────────────────────────
+    // ── Setup ──────────────────────────────────────────
     let tmp = tempfile::TempDir::new()?;
-    let source_file = tmp.path().join("source.json");
-    let sink_output = tmp.path().join("sink_output.json");
+    #[allow(deprecated)]
+    let tmp_path = tmp.into_path();
+    let baseline_path = tmp_path.join("baseline.json");
 
-    // Write test data: [1, 2, 3]
-    let baseline_data = serde_json::json!({
-        "data": [1, 2, 3],
-        "data_type": "Int32"
-    });
-    std::fs::write(&source_file, serde_json::to_string_pretty(&baseline_data)?)?;
+    // Static dataflow files. dora resolves their relative paths against
+    // the YAML file's own directory, so no generation is needed.
+    let baseline_yaml = PathBuf::from("demo/trajectory-baseline.yml");
+    let mutated_yaml = PathBuf::from("demo/trajectory-mutated.yml");
 
-    // Generate echo dataflow YAML
-    let source_bin = bin_path("test-source");
-    let echo_bin = bin_path("echo-node");
-    let sink_bin = bin_path("test-sink");
+    // Output path must match the test-sink args in the static YAMLs.
+    let sink_output = PathBuf::from("demo/sink_trajectory.json");
 
-    let yaml = format!(
-        r#"nodes:
-  - id: test-source
-    path: {}
-    args: "--output-id data --data-file {}"
-    outputs:
-      - data
-  - id: echo-node
-    path: {}
-    inputs:
-      data: test-source/data
-    outputs:
-      - data
-  - id: test-sink
-    path: {}
-    inputs:
-      data: echo-node/data
-    args: "--output-file {} --record-mode"
-"#,
-        source_bin.display(),
-        source_file.display(),
-        echo_bin.display(),
-        sink_bin.display(),
-        sink_output.display(),
-    );
-    let yaml_path = tmp.path().join("echo.yml");
-    std::fs::write(&yaml_path, &yaml)?;
+    // ── Step 1: Record baseline ────────────────────────
+    section("Step 1 — Record baseline (trajectory with --steps 10)");
 
-    // ── 2. Record baseline ───────────────────────────
-    println!("═══ Step 1: Record baseline ═══");
-    println!("  Data:     {}", serde_json::to_string(&baseline_data)?);
-    println!("  Dataflow: {}", yaml_path.display());
-    println!("  → Running dora run --stop-after 10s ...\n");
+    step(&format!("Dataflow: {}", baseline_yaml.display()));
+    step("2 targets × 10 interpolation steps × 7 joints = 140 trajectory values");
+    step("Running dora run --stop-after 10s ...");
 
-    let recording = RecordSession::attach(&yaml_path)?
+    let recording = RecordSession::attach(&baseline_yaml)?
         .record_sink("test-sink", &sink_output)
         .with_timeout(Duration::from_secs(10))
         .run()?;
 
-    let baseline_path = tmp.path().join("baseline.json");
     recording.save(&baseline_path)?;
-    println!("  ✅ Baseline saved: {}\n", baseline_path.display());
-    println!("  Metadata:");
-    println!("    dataflow: {}", recording.metadata.dataflow_yaml);
-    println!("    timeout:  {}s", recording.metadata.timeout_secs);
-    println!("    dora:     {}", recording.metadata.dora_version);
+    ok(&format!("baseline saved → {}", baseline_path.display()));
+
+    // Show recorded data sample
+    println!();
+    println!("  ── Recording metadata ──");
+    println!("  dora version:   {}", recording.metadata.dora_version);
     println!(
-        "    sinks:    {:?}\n",
+        "  sinks recorded: {:?}",
         recording.sinks.keys().collect::<Vec<_>>()
     );
-
-    // ── 3. Replay — clean (no regression) ────────────
-    println!("═══ Step 2: Replay — verify no regression ═══");
-    println!("  → Replaying against baseline...\n");
-
-    let result = ReplaySession::load(&baseline_path)?
-        .replay_sink("test-sink", &sink_output)
-        .with_timeout(Duration::from_secs(10))
-        .run()?;
-
-    result.assert_no_regression();
-    println!("  ✅ is_clean() = true");
-    println!("  No regressions detected.\n");
-
-    // ── 4. Mutate source data ────────────────────────
-    println!("═══ Step 3: Mutate source data ─════");
-    let mutated_data = serde_json::json!({
-        "data": [1, 2, 99],  // ← was [1, 2, 3]
-        "data_type": "Int32"
-    });
-    std::fs::write(&source_file, serde_json::to_string_pretty(&mutated_data)?)?;
-    println!("  Changed: [1, 2, 3] → [1, 2, 99]\n");
-
-    // ── 5. Replay — regression detected ───────────────
-    println!("═══ Step 4: Replay — regression detected ═══");
-    println!("  → Replaying with mutated data...\n");
-
-    let result = ReplaySession::load(&baseline_path)?
-        .replay_sink("test-sink", &sink_output)
-        .with_timeout(Duration::from_secs(10))
-        .run()?;
-
-    println!("  is_clean() = {}", result.is_clean());
-    println!();
-    println!("  Diff report:");
-    println!("{}", result.diff());
-
-    if !result.is_clean() {
-        println!("  ✅ Regression correctly detected!");
+    if let Some(traj) = recording.sinks.get("test-sink") {
+        let count = traj.get("count").and_then(|c| c.as_u64());
+        if count != Some(140) {
+            fail(&format!(
+                "baseline recorded {count:?} trajectory values, expected 140 — \
+                 the source delivery may have dropped messages"
+            ));
+        }
+        println!("  trajectory values: 140 (expected)");
+        if let Some(arr) = traj.get("data").and_then(|d| d.as_array()) {
+            let head: Vec<String> = arr.iter().take(7).map(|v| v.to_string()).collect();
+            println!("  first step (J1..J7): [{}]", head.join(", "));
+        }
     } else {
-        eprintln!(
-            "  ❌ FAIL: Regression NOT detected — mutated data should have caused a Mismatch!"
-        );
-        std::process::exit(1);
+        fail("baseline is missing the test-sink recording");
     }
 
-    println!("\n══════════════════════════════════════════════");
-    println!("  Demo complete — all paths verified.");
-    println!("══════════════════════════════════════════════");
+    // ── Step 2: Clean replay ───────────────────────────
+    section("Step 2 — Replay (same YAML, no regression)");
+
+    step("The trajectory output is pure computation — fully deterministic,");
+    step("so no filtering is needed. Real pipelines with timing noise use");
+    step("ignore_paths / ignore_sink to skip non-deterministic fields.");
+    let result = ReplaySession::load(&baseline_path)?
+        .replay_sink("test-sink", &sink_output)
+        .with_timeout(Duration::from_secs(10))
+        .run()?;
+
+    ok(&format!("is_clean() = {}", result.is_clean()));
+    result.assert_no_regression();
+    ok("assert_no_regression() — no panic");
+
+    // ── Step 3: Mutated dataflow ───────────────────────
+    section("Step 3 — Switch to mutated dataflow (interpolation --steps 10 → 5)");
+
+    step(&format!("Dataflow: {}", mutated_yaml.display()));
+    step("The motion controller now interpolates with HALF the resolution —");
+    step("a real regression: someone changed the trajectory parameter.");
+    step("→ 2 × 5 × 7 = 70 trajectory values instead of 140, and every");
+    step("   shared interpolation point differs.");
+    ok("mutated dataflow ready");
+
+    // ── Step 4: Regression detected ────────────────────
+    section("Step 4 — Replay (regression detected)");
+
+    step("Replaying with mutated dataflow...");
+    let result = ReplaySession::load(&baseline_path)?
+        .replay_sink("test-sink", &sink_output)
+        .dataflow(&mutated_yaml)
+        .with_timeout(Duration::from_secs(10))
+        .run()?;
+
+    let clean = result.is_clean();
+    if clean {
+        fail("BUG: is_clean() = true — regression was NOT detected!");
+    }
+    ok(&format!("is_clean() = {}  ← regression detected", clean));
+
+    // Print the structured diff (trimmed for readability)
+    step("DiffReport:");
+    print_diff_trimmed(result.diff(), 14);
+
+    // assert_no_regression should panic here
+    step("Verifying assert_no_regression() panics on regression...");
+    let panic_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        result.assert_no_regression();
+    }));
+    match panic_result {
+        Err(_) => ok("assert_no_regression() panicked — correct"),
+        Ok(()) => fail("BUG: assert_no_regression() did NOT panic on regression!"),
+    }
+
+    // ── Summary ────────────────────────────────────────
+    section("Summary");
+    println!("  ✅ Record baseline         — 140 trajectory values (steps 10)");
+    println!("  ✅ Replay (clean)          — is_clean() = true (deterministic output)");
+    println!("  ✅ Replay (regression)     — is_clean() = false, 140 → 70 values");
+    println!("  ✅ assert_no_regression()  — panics on regression");
+    println!();
+    println!("  How this helps the DORA community:");
+    println!("    • GEN72 motion-control scenario — a realistic regression test");
+    println!("    • Static YAML files — exactly how you'd use the tool on your own dataflow");
+    println!("    • The mutation is a parameter change in the dataflow, not in the tool");
+    println!("    • Non-deterministic noise? ignore_paths / ignore_sink handle it");
+
     Ok(())
 }

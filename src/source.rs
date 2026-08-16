@@ -10,6 +10,20 @@ use eyre::{Context, Result};
 
 type DataId = dora_node_api::dora_core::config::DataId;
 
+/// Delay before emitting, letting downstream nodes install their input
+/// subscriptions (messages sent in the registration window are dropped).
+const SUBSCRIBER_SETTLE_DELAY: std::time::Duration = std::time::Duration::from_millis(500);
+/// Linger after emitting so the daemon delivers every queued message
+/// before this process exits and closes the input stream.
+const EXIT_LINGER: std::time::Duration = std::time::Duration::from_secs(2);
+
+/// True when running in standalone mode (no daemon): the test-source
+/// feeds a DoraNode directly via DORA_TEST_WITH_INPUTS, so there is no
+/// daemon to race against and the delivery delays can be skipped.
+fn standalone_mode() -> bool {
+    std::env::var("DORA_TEST_WITH_INPUTS").is_ok()
+}
+
 /// A single output specification: an output ID and its data.
 #[derive(Debug, Clone)]
 pub struct OutputSpec {
@@ -53,10 +67,30 @@ pub fn run_test_source(config: SourceConfig) -> Result<()> {
     let (mut node, _events) =
         DoraNode::init_from_env().context("failed to initialize DORA node")?;
 
+    // Let downstream subscribers install their input subscriptions
+    // before emitting — messages sent in the registration window are
+    // dropped (late-subscriber race, observed at dataflow start).
+    // Standalone mode (DORA_TEST_WITH_INPUTS) has no daemon, so the
+    // race does not exist there.
+    if !standalone_mode() {
+        std::thread::sleep(SUBSCRIBER_SETTLE_DELAY);
+    }
+
     for spec in &config.outputs {
         emit_output(&mut node, spec)
             .with_context(|| format!("failed to emit output '{}'", spec.output_id))?;
     }
+
+    // Linger briefly so the daemon can deliver every queued message.
+    // Exiting right after send_output closes the input stream while
+    // messages are still in flight, and the daemon drops them
+    // nondeterministically — observed at ~7+ emitted values (the
+    // trajectory demo sends 14).  A fixed linger keeps the dataflow
+    // teardown fast (no need to wait for --stop-after).
+    if !standalone_mode() {
+        std::thread::sleep(EXIT_LINGER);
+    }
+
     Ok(())
 }
 
@@ -472,15 +506,15 @@ mod tests {
     }
 
     #[test]
-    #[allow(clippy::approx_constant)]
     fn test_json_to_arrow_float64() {
-        let arr = json_value_to_arrow_array(&serde_json::json!(3.14), None).unwrap();
+        let arr =
+            json_value_to_arrow_array(&serde_json::json!(std::f64::consts::PI), None).unwrap();
         assert_eq!(arr.len(), 1);
         let float_arr = arr
             .as_any()
             .downcast_ref::<arrow::array::Float64Array>()
             .expect("should be Float64Array");
-        assert!((float_arr.value(0) - 3.14).abs() < 0.001);
+        assert!((float_arr.value(0) - std::f64::consts::PI).abs() < 0.001);
     }
 
     #[test]
@@ -563,12 +597,13 @@ mod tests {
     #[test]
     fn test_json_to_arrow_float32() {
         let dt = arrow::datatypes::DataType::Float32;
-        let arr = json_value_to_arrow_array(&serde_json::json!(3.14), Some(&dt)).unwrap();
+        let arr =
+            json_value_to_arrow_array(&serde_json::json!(std::f32::consts::PI), Some(&dt)).unwrap();
         let float_arr = arr
             .as_any()
             .downcast_ref::<arrow::array::Float32Array>()
             .expect("should be Float32Array from Float32 hint");
-        assert!((float_arr.value(0) - 3.14f32).abs() < 0.001);
+        assert!((float_arr.value(0) - std::f32::consts::PI).abs() < 0.001);
     }
 
     #[test]

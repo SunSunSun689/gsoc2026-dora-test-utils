@@ -115,8 +115,8 @@
 //! daemon-thread deadlock (dora-rs/dora#2855).
 //!
 //! **Outputs** are captured through [`TestingOutput::ToChannel`] using
-//! `flume` (the upstream default; a tokio-mpsc migration is pending as
-//! upstream PR (a) — mentor Discussion #28).
+//! `tokio::sync::mpsc::unbounded_channel` (re-exported from
+//! `dora_node_api::integration_testing`).
 //!
 //! For pure-mock testing (no real node), the standalone mock types
 //! ([`MockEventStream`], [`MockOutputSender`]) use

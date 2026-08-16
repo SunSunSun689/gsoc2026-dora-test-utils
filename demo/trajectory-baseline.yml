@@ -1,0 +1,33 @@
+# dora-test-utils Layer 3 Demo — BASELINE trajectory dataflow
+# This is THE file the demo runs (examples/demo_replay.rs Step 1-2).
+# See demo/README.md for the full walkthrough.
+#
+# GEN72 joint-space motion control: test-source sends two target
+# configurations (7 joints each, degrees); trajectory-node linearly
+# interpolates all 7 joints from the current pose to each target in
+# 10 steps; test-sink records the resulting trajectory in record mode.
+# Output is pure computation — fully deterministic.
+#
+# Relative paths resolve against this file's directory (dora behavior),
+# so it works as-is from the repo root.
+
+nodes:
+  - id: test-source
+    path: ../target/debug/test-source
+    args: "--output-id target --data-file trajectory-targets.json"
+    outputs:
+      - target
+
+  - id: trajectory-node
+    path: ../target/debug/trajectory-node
+    args: "--steps 10"
+    inputs:
+      target: test-source/target
+    outputs:
+      - trajectory
+
+  - id: test-sink
+    path: ../target/debug/test-sink
+    inputs:
+      trajectory: trajectory-node/trajectory
+    args: "--output-file ./sink_trajectory.json --record-mode"

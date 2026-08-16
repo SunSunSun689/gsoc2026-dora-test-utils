@@ -23,14 +23,14 @@ pub type OutputMessage = (String, arrow::array::ArrayData);
 /// assert_eq!(outputs.len(), 1);
 /// ```
 pub struct MockOutputSender {
-    tx: mpsc::Sender<OutputMessage>,
+    tx: mpsc::UnboundedSender<OutputMessage>,
 }
 
 /// Accumulator that collects and indexes outputs by ID for assertion.
 ///
 /// This is the receiver side of a `MockOutputSender` pair.
 pub struct OutputCollector {
-    rx: mpsc::Receiver<OutputMessage>,
+    rx: mpsc::UnboundedReceiver<OutputMessage>,
     /// All outputs received so far, keyed by output ID.
     ///
     /// Each `send_output(id, data)` call appends `data` to the vector
@@ -40,8 +40,13 @@ pub struct OutputCollector {
 
 impl MockOutputSender {
     /// Create a new mock output sender and a corresponding collector.
+    ///
+    /// The channel is unbounded, matching the real `DoraNode`'s
+    /// `TestingOutput::ToChannel` (unbounded tokio mpsc) — a node emitting
+    /// more outputs than a bounded buffer would hold must not deadlock the
+    /// test.  Keep the returned collector alive: it is the receiver side.
     pub fn new() -> (Self, OutputCollector) {
-        let (tx, rx) = mpsc::channel(256);
+        let (tx, rx) = mpsc::unbounded_channel();
         (
             Self { tx },
             OutputCollector {
@@ -52,6 +57,10 @@ impl MockOutputSender {
     }
 
     /// Send an output — mirrors the real `DoraNode::send_output(id, data)`.
+    ///
+    /// Unbounded, so it never blocks and never fails on backpressure;
+    /// it only errors when the paired [`OutputCollector`] has been dropped.
+    /// Kept `async` for API compatibility with existing callers.
     pub async fn send(
         &self,
         output_id: String,
@@ -59,7 +68,6 @@ impl MockOutputSender {
     ) -> Result<(), String> {
         self.tx
             .send((output_id, data))
-            .await
             .map_err(|_| "output receiver closed".to_string())
     }
 }
@@ -89,12 +97,6 @@ impl OutputCollector {
     /// Return `true` if no outputs have been recorded.
     pub fn is_empty(&self) -> bool {
         self.buffers.is_empty()
-    }
-}
-
-impl Default for MockOutputSender {
-    fn default() -> Self {
-        Self::new().0
     }
 }
 
@@ -160,5 +162,21 @@ mod tests {
 
         let result = sender.send("output".into(), create_test_array()).await;
         assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_mock_output_sender_many_outputs_no_deadlock() {
+        // Unbounded channel: emitting far more outputs than a bounded
+        // buffer would hold must not block or fail.
+        let (sender, mut collector) = MockOutputSender::new();
+        for _ in 0..1000 {
+            sender
+                .send("bulk".into(), create_test_array())
+                .await
+                .unwrap();
+        }
+        collector.collect_pending().await;
+        let outputs = collector.drain("bulk");
+        assert_eq!(outputs.unwrap().len(), 1000);
     }
 }

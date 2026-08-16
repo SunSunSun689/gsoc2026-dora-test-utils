@@ -56,13 +56,16 @@ jobs:
   integration-test:
     name: cargo test --integration
     runs-on: ubuntu-latest
+    # A hung daemon (the deadlock class in docs/CI-DEADLOCK-FIX.md) would
+    # otherwise hold the job until GitHub's ~360-minute default — fail fast.
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
 
       # DORA CLI is needed for `dora run` in integration + record tests.
       # dora-node-api is pulled as a git dep (Cargo.toml) — no patch needed.
-      - run: git clone https://github.com/dora-rs/dora.git dora && git -C dora checkout 45436aad124fe46463d0b0411e3922dae8ee9ebd
+      - run: git clone https://github.com/dora-rs/dora.git dora && git -C dora checkout 1fba7214b79d8488229f6cc2027b9760dec4d6df
         working-directory: ${{ github.workspace }}
 
       # Cache dora build artifacts — keyed on dora source hash so the
@@ -81,7 +84,11 @@ jobs:
       - run: cargo build --bin test-source --bin test-sink --bin echo-node --bin classifier-node
 
       # Run integration tests serially (dora daemon binds port 6013).
+      # No per-step timeout here: the job-level timeout-minutes above is the
+      # bound, and the serial suite's dora runs are bounded by --stop-after.
       - run: cargo test --test integration -- --test-threads=1
       # Record/replay e2e tests (need dora CLI + test binaries built above).
-      - run: timeout 120 cargo test --test e2e_record -- --test-threads=1
-      - run: timeout 120 cargo test --test e2e_replay -- --test-threads=1
+      # Each test performs one or more `dora run --stop-after 10s` calls;
+      # 240s gives ~2x headroom over the measured ~40s suite.
+      - run: timeout 240 cargo test --test e2e_record -- --test-threads=1
+      - run: timeout 240 cargo test --test e2e_replay -- --test-threads=1

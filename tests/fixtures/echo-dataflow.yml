@@ -1,12 +1,16 @@
 # Echo pipeline — demo dataflow for test-source → echo-node → test-sink.
 #
+# Embodied-AI theme: one Realman GEN72 joint configuration — the 7 joint
+# angles (J1..J7) of a safe pose — relayed through an echo node and
+# verified at the sink.  Same pose as examples/harness_demo.rs Part B.
+#
 # Usage (from crate root, after cargo build):
 #   cargo build --bin test-source --bin test-sink --bin echo-node
 #   dora/target/debug/dora run tests/fixtures/echo-dataflow.yml --stop-after 10s
 #   cat result.json
 #
 # The pipeline:
-#   1. test-source reads source-data.json and emits three Int64 values
+#   1. test-source reads source-data.json and emits the 7 joint angles
 #   2. echo-node echoes each input back as an output
 #   3. test-sink captures outputs, compares with expected-output.json, writes result.json
 
